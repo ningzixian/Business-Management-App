@@ -1,0 +1,19 @@
+{
+  "name": "部门小管家",
+  "short_name": "小管家",
+  "description": "部门商务拜访、客户与待办事项协作管理",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#0755c9",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

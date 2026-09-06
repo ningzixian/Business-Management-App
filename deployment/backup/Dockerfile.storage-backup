@@ -1,0 +1,5 @@
+FROM quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z AS client
+
+FROM alpine:3.22
+COPY --from=client /usr/bin/mc /usr/bin/mc
+RUN command -v find >/dev/null && /usr/bin/mc --version

@@ -3,4 +3,8 @@ dist/
 .npm-cache/
 *.local
 .DS_Store
-
+server/node_modules/
+server/.test-dist/
+.env
+.env.*.local
+deployment/*.zip

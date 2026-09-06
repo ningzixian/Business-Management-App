@@ -1,0 +1,16 @@
+.git
+.github
+.agents
+.codex
+.npm-cache
+node_modules
+server/node_modules
+server/dist
+server/.test-dist
+dist
+android
+ios
+*.log
+.env
+.env.*.local
+deployment/server-state

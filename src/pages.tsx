@@ -1,7 +1,6 @@
 import {
   AlertTriangle,
   ArrowRight,
-  BarChart3,
   Building2,
   CalendarCheck2,
   CalendarDays,
@@ -11,24 +10,19 @@ import {
   ChevronRight,
   Circle,
   Clock3,
-  Database,
   Download,
-  FileText,
   Filter,
   ListTodo,
-  LockKeyhole,
   MapPin,
   MoreHorizontal,
   Plus,
   Search,
-  ShieldCheck,
-  Smartphone,
   TrendingUp,
   UsersRound,
 } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import { departmentRanking, weeklyPerformance } from './data'
-import type { Customer, Task, Visit } from './types'
+import type { Customer, EntityId, Task, Visit } from './types'
 import {
   Card,
   CardHeader,
@@ -45,36 +39,51 @@ interface VisitActions {
   onSelectVisit: (visit: Visit) => void
 }
 
-interface DashboardProps extends VisitActions {
+interface DashboardProps {
+  visits: Visit[]
   tasks: Task[]
-  onToggleTask: (taskId: number) => void
+  displayName: string
+  onCreate: (kind: 'visit' | 'task' | 'organization' | 'contact') => void
+  onSelectVisit: (visit: Visit) => void
+  onToggleTask: (taskId: EntityId) => void
 }
 
-const todayVisits = (visits: Visit[]) => visits.filter((visit) => visit.date === '2026-09-04')
+const todayIso = () => {
+  const now = new Date()
+  const offset = now.getTimezoneOffset() * 60_000
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10)
+}
+
+const todayVisits = (visits: Visit[]) => visits.filter((visit) => visit.date === todayIso())
 
 export function DashboardPage({
   visits,
   tasks,
+  displayName,
   onCreate,
   onSelectVisit,
   onToggleTask,
 }: DashboardProps) {
   const currentVisits = todayVisits(visits)
   const openTasks = tasks.filter((task) => task.status !== '已完成')
+  const completedTasks = tasks.filter((task) => task.status === '已完成').length
+  const overdueTasks = tasks.filter((task) => task.status === '已逾期').length
+  const todayTasks = openTasks.filter((task) => task.due === todayIso()).length
+  const completionRate = tasks.length ? Math.round((completedTasks / tasks.length) * 100) : 0
 
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="2026年9月4日 · 星期五"
-        title="上午好，张伟"
-        description="今天有 6 次客户拜访，3 项重点工作需要关注。"
+        eyebrow={new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())}
+        title={`${new Date().getHours() < 12 ? '上午好' : new Date().getHours() < 18 ? '下午好' : '晚上好'}，${displayName}`}
+        description={`今天有 ${currentVisits.length} 次客户拜访，${overdueTasks} 项逾期工作需要关注。`}
         actions={
           <>
             <button className="button button-secondary" type="button">
               <Download size={17} />
               导出周报
             </button>
-            <button className="button button-primary" type="button" onClick={onCreate}>
+            <button className="button button-primary" type="button" onClick={() => onCreate('visit')}>
               <Plus size={18} />
               新建记录
             </button>
@@ -86,27 +95,27 @@ export function DashboardPage({
         <StatCard
           title="今日拜访"
           value={String(currentVisits.length)}
-          hint="较昨日增加 2 次"
+          hint="按事项时间自动汇总"
           icon={<CalendarCheck2 />}
           tone="blue"
         />
         <StatCard
           title="待办事项"
-          value="12"
-          hint="其中 4 项今日到期"
+          value={String(openTasks.length)}
+          hint={`其中 ${todayTasks} 项今日到期`}
           icon={<ListTodo />}
           tone="green"
         />
         <StatCard
           title="本周已完成"
-          value="28"
-          hint="完成率 87.5%"
+          value={String(completedTasks)}
+          hint={`当前完成率 ${completionRate}%`}
           icon={<CheckCircle2 />}
           tone="cyan"
         />
         <StatCard
           title="逾期事项"
-          value="3"
+          value={String(overdueTasks)}
           hint="需优先处理"
           icon={<AlertTriangle />}
           tone="orange"
@@ -205,21 +214,21 @@ export function DashboardPage({
         <Card className="quick-card">
           <CardHeader title="快捷操作" subtitle="常用业务入口" />
           <div className="quick-grid">
-            <button type="button" onClick={onCreate}>
+            <button type="button" onClick={() => onCreate('visit')}>
               <span><Plus size={18} /></span>
               新建拜访
             </button>
-            <button type="button">
+            <button type="button" onClick={() => onCreate('organization')}>
               <span><UsersRound size={18} /></span>
-              添加客户
+              添加组织
             </button>
-            <button type="button">
+            <button type="button" onClick={() => onCreate('contact')}>
+              <span><UsersRound size={18} /></span>
+              添加人脉
+            </button>
+            <button type="button" onClick={() => onCreate('task')}>
               <span><ListTodo size={18} /></span>
               创建待办
-            </button>
-            <button type="button">
-              <span><FileText size={18} /></span>
-              生成周报
             </button>
           </div>
         </Card>
@@ -339,24 +348,25 @@ export function CustomersPage({
   return (
     <div className="page-stack">
       <PageHeader
-        title="客户"
-        description="统一管理客户档案、联系人和历史跟进信息。"
+        eyebrow="独立主数据"
+        title="甲方组织库"
+        description="独立维护公司、子公司及组织信息，并通过任职关系关联人脉。"
         actions={
           <button className="button button-primary" type="button" onClick={onCreate}>
-            <Plus size={18} /> 添加客户
+            <Plus size={18} /> 添加组织
           </button>
         }
       />
-      <Toolbar placeholder="搜索客户名称、联系人或负责人" />
+      <Toolbar placeholder="搜索组织名称、主要联系人或负责人" />
       <section className="customer-summary-grid">
-        <MiniMetric label="客户总数" value={String(122 + customerList.length)} note="本月新增 8" icon={<Building2 />} />
-        <MiniMetric label="重点跟进" value="16" note="较上月增加 3" icon={<TrendingUp />} />
-        <MiniMetric label="本月已拜访" value="47" note="覆盖率 36.7%" icon={<CalendarCheck2 />} />
+        <MiniMetric label="组织总数" value={String(customerList.length)} note="部门可见主数据" icon={<Building2 />} />
+        <MiniMetric label="重点组织" value={String(customerList.filter((item) => item.status === '重点跟进').length)} note="需优先维护关系" icon={<TrendingUp />} />
+        <MiniMetric label="已有拜访" value={String(customerList.filter((item) => item.lastVisit !== '暂无拜访').length)} note="关联事项自动汇总" icon={<CalendarCheck2 />} />
       </section>
       <Card className="table-card">
         <div className="data-table customer-table">
           <div className="table-row table-head">
-            <span>客户名称</span><span>联系人</span><span>所在地区</span><span>最近拜访</span>
+            <span>组织名称</span><span>主要联系人</span><span>所在地区</span><span>最近拜访</span>
             <span>待办</span><span>状态</span><span>负责人</span><span />
           </div>
           {customerList.map((customer) => <CustomerRow customer={customer} key={customer.id} />)}
@@ -435,7 +445,7 @@ export function TasksPage({
   onCreate,
 }: {
   tasks: Task[]
-  onToggleTask: (id: number) => void
+  onToggleTask: (id: EntityId) => void
   onCreate: () => void
 }) {
   const done = tasks.filter((task) => task.status === '已完成').length
@@ -635,51 +645,6 @@ function IndustryChart() {
         {industries.map((item) => <div key={item.name}><span><i style={{ background: item.color }} />{item.name}</span><strong>{item.value}%</strong></div>)}
       </div>
     </div>
-  )
-}
-
-export function SettingsPage() {
-  return (
-    <div className="page-stack">
-      <PageHeader title="设置" description="管理个人偏好、组织配置与系统安全。" />
-      <section className="settings-layout">
-        <Card className="profile-card">
-          <div className="profile-hero">
-            <InitialAvatar text="张伟" size="large" />
-            <div><strong>张伟</strong><span>市场部 · 销售经理</span><small>zhangwei@company.com</small></div>
-            <button className="button button-secondary" type="button">编辑资料</button>
-          </div>
-        </Card>
-        <div className="settings-grid">
-          <SettingCard icon={<UsersRound />} title="组织与成员" description="维护部门、人员与汇报关系" meta="32 名成员" />
-          <SettingCard icon={<ShieldCheck />} title="角色与权限" description="配置功能权限和部门数据范围" meta="3 个角色" />
-          <SettingCard icon={<LockKeyhole />} title="登录与安全" description="统一认证、密码策略与登录日志" meta="安全状态正常" />
-          <SettingCard icon={<Database />} title="数据与备份" description="导出、备份与数据保留策略" meta="今日已备份" />
-          <SettingCard icon={<Smartphone />} title="部门小管家" description="移动端安装、通知与离线设置" meta="版本 0.1.0" />
-          <SettingCard icon={<BarChart3 />} title="业务字典" description="客户行业、拜访类型与状态配置" meta="18 个配置项" />
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function SettingCard({
-  icon,
-  title,
-  description,
-  meta,
-}: {
-  icon: ReactNode
-  title: string
-  description: string
-  meta: string
-}) {
-  return (
-    <button className="setting-card" type="button">
-      <span className="setting-icon">{icon}</span>
-      <span><strong>{title}</strong><small>{description}</small><em>{meta}</em></span>
-      <ChevronRight size={18} />
-    </button>
   )
 }
 

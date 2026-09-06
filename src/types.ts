@@ -1,6 +1,7 @@
 export type PageKey =
   | 'dashboard'
-  | 'customers'
+  | 'organizations'
+  | 'contacts'
   | 'visits'
   | 'tasks'
   | 'calendar'
@@ -10,9 +11,12 @@ export type PageKey =
 export type VisitStatus = '已完成' | '进行中' | '待开始' | '已延期'
 export type TaskStatus = '待处理' | '进行中' | '已完成' | '已逾期'
 export type Priority = '高' | '中' | '低'
+export type EntityId = string | number
 
 export interface Visit {
-  id: number
+  id: EntityId
+  organizationIds?: string[]
+  contactIds?: string[]
   customer: string
   shortName: string
   contact: string
@@ -31,7 +35,10 @@ export interface Visit {
 }
 
 export interface Task {
-  id: number
+  id: EntityId
+  organizationIds?: string[]
+  contactIds?: string[]
+  isInternal?: boolean
   title: string
   customer: string
   assignee: string
@@ -43,7 +50,7 @@ export interface Task {
 }
 
 export interface Customer {
-  id: number
+  id: EntityId
   name: string
   shortName: string
   industry: string
@@ -58,3 +65,46 @@ export interface Customer {
   color: string
 }
 
+export interface ContactAffiliation {
+  id?: EntityId
+  organizationId: string
+  organizationName: string
+  organizationUnitId?: string
+  organizationUnitName?: string
+  title?: string
+  relationshipRole?: string
+  isPrimary: boolean
+  status: 'current' | 'historical'
+  startDate?: string
+  endDate?: string
+}
+
+export interface Contact {
+  id: EntityId
+  fullName: string
+  gender?: string
+  mobile: string
+  phone?: string
+  email?: string
+  wechat?: string
+  city?: string
+  tags: string[]
+  relationshipLevel: 'key' | 'important' | 'normal' | 'new'
+  status: 'provisional' | 'active' | 'inactive'
+  visibility: 'department' | 'private'
+  ownerName: string
+  primaryOrganizationId?: string
+  primaryOrganizationName?: string
+  primaryTitle?: string
+  affiliationCount: number
+  itemCount: number
+  affiliations?: ContactAffiliation[]
+}
+
+export interface SessionUser {
+  userId: string
+  departmentId: string
+  username: string
+  displayName: string
+  role: 'admin' | 'manager' | 'member' | 'readonly'
+}

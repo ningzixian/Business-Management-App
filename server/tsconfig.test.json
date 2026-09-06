@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "declaration": false,
+    "sourceMap": false,
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": ".test-dist"
+  },
+  "include": [
+    "src/config/environment.ts",
+    "src/auth/password-policy.ts",
+    "src/business-items/relation-policy.ts",
+    "test/**/*.ts"
+  ]
+}

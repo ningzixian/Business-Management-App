@@ -1,0 +1,259 @@
+name: business-management
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+x-security: &default-security
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  web:
+    <<: *default-security
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_DEMO_MODE: "false"
+    image: business-management-web:0.2.0
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    ports:
+      - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8088}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - edge
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 100
+    logging: *default-logging
+    labels:
+      com.company.application: business-management
+      com.company.component: web
+      com.company.version: 0.2.0
+
+  api:
+    <<: *default-security
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: business-management-api:0.2.0
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_PREFIX: api/v1
+      CORS_ORIGINS: "http://${SERVER_LAN_ADDRESS:-192.168.0.253}:${WEB_PORT:-8088},https://localhost,capacitor://localhost,http://localhost"
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_SSL: "false"
+      DB_POOL_MAX: 8
+      AUTO_MIGRATE: "true"
+      SEED_INITIAL_DATA: ${SEED_INITIAL_DATA:-true}
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
+      SELF_REGISTRATION_ENABLED: ${SELF_REGISTRATION_ENABLED:-false}
+      REGISTRATION_DEPARTMENT_CODE: ${REGISTRATION_DEPARTMENT_CODE:-BUSINESS}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TTL_SECONDS: 900
+      JWT_REFRESH_TTL_DAYS: 30
+      MINIO_DISABLED: "false"
+      MINIO_ENDPOINT: storage
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-business-attachments}
+      MAX_UPLOAD_BYTES: 20971520
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_started
+    networks:
+      - edge
+      - data
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 200
+    logging: *default-logging
+    labels:
+      com.company.application: business-management
+      com.company.component: api
+      com.company.version: 0.2.0
+
+  db:
+    <<: *default-security
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+      PGTZ: Asia/Shanghai
+    command:
+      - postgres
+      - -c
+      - max_connections=50
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - log_min_duration_statement=1000
+    volumes:
+      - type: bind
+        source: ${BUSINESS_DATA_ROOT}/postgres
+        target: /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - data
+    shm_size: 128mb
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+    logging: *default-logging
+    labels:
+      com.company.application: business-management
+      com.company.component: database
+      com.company.version: 0.2.0
+
+  storage:
+    <<: *default-security
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --address :9000 --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - type: bind
+        source: ${BUSINESS_DATA_ROOT}/minio
+        target: /data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    networks:
+      - data
+    # Current MinIO releases pre-allocate about 1 GiB for a single-node server.
+    # Leave headroom above that floor so the process does not restart during boot.
+    mem_limit: 1280m
+    cpus: 0.5
+    pids_limit: 150
+    logging: *default-logging
+    labels:
+      com.company.application: business-management
+      com.company.component: object-storage
+      com.company.version: 0.2.0
+
+  db-backup:
+    <<: *default-security
+    image: postgres:17-alpine
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    entrypoint: ["/bin/sh", "/scripts/backup-db.sh"]
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+    volumes:
+      - type: bind
+        source: ./deployment/backup/backup-db.sh
+        target: /scripts/backup-db.sh
+        read_only: true
+      - type: bind
+        source: ${BUSINESS_BACKUP_ROOT}
+        target: /backups
+      # The postgres image declares this path as a volume even though pg_dump does not
+      # use it. An explicit mount prevents Docker from preserving an anonymous volume.
+      - type: tmpfs
+        target: /var/lib/postgresql/data
+        tmpfs:
+          size: 16777216
+          mode: 448
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - data
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 80
+    logging: *default-logging
+    labels:
+      com.company.application: business-management
+      com.company.component: database-backup
+      com.company.version: 0.2.0
+
+  storage-backup:
+    <<: *default-security
+    build:
+      context: .
+      dockerfile: deployment/backup/Dockerfile.storage-backup
+    image: business-management-storage-backup:0.2.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/scripts/backup-storage.sh"]
+    environment:
+      MINIO_ENDPOINT: http://storage:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-business-attachments}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+    volumes:
+      - type: bind
+        source: ./deployment/backup/backup-storage.sh
+        target: /scripts/backup-storage.sh
+        read_only: true
+      - type: bind
+        source: ${BUSINESS_BACKUP_ROOT}
+        target: /backups
+    depends_on:
+      storage:
+        condition: service_started
+    networks:
+      - data
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 80
+    logging: *default-logging
+    labels:
+      com.company.application: business-management
+      com.company.component: attachment-backup
+      com.company.version: 0.2.0
+
+networks:
+  edge:
+    driver: bridge
+  data:
+    driver: bridge
+    internal: true

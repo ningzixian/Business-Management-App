@@ -14,7 +14,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
     "test:api": "npm test --prefix server",
-    "verify": "npm run typecheck && npm run build && npm run build:api && npm run test:api",
+    "test:client": "node --test tests/phase6.test.cjs",
+    "verify": "npm run typecheck && npm run build && npm run build:api && npm run test:api && npm run test:client",
     "mobile:sync": "npm run build:mobile && cap sync",
     "mobile:android": "npm run mobile:sync && cap open android",
     "mobile:ios": "npm run mobile:sync && cap open ios"

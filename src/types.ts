@@ -8,12 +8,17 @@ export type PageKey =
   | 'reports'
   | 'settings'
 
-export type VisitStatus = '已完成' | '进行中' | '待开始' | '已延期'
-export type TaskStatus = '待处理' | '进行中' | '已完成' | '已逾期'
+export type VisitStatus = '已完成' | '进行中' | '待开始' | '已延期' | '已取消'
+export type TaskStatus = '待处理' | '进行中' | '已完成' | '已逾期' | '已取消'
 export type Priority = '高' | '中' | '低'
 export type EntityId = string | number
 
 export interface Visit {
+  revision?: string
+  events?: Array<{ id: string; action: string; createdAt: string; actorName?: string }>
+  ownerUserId?: string
+  completedAt?: string
+  createdAt?: string
   id: EntityId
   organizationIds?: string[]
   contactIds?: string[]
@@ -35,6 +40,12 @@ export interface Visit {
 }
 
 export interface Task {
+  sourceItemId?: string
+  ownerUserId?: string
+  completedAt?: string
+  createdAt?: string
+  dueAt?: string
+  content?: string
   id: EntityId
   organizationIds?: string[]
   contactIds?: string[]
@@ -50,6 +61,10 @@ export interface Task {
 }
 
 export interface Customer {
+  address?: string
+  parentOrganizationId?: string | null
+  parentOrganizationName?: string | null
+  organizationType?: string
   id: EntityId
   name: string
   shortName: string

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common'
+import { NotificationsModule } from './notifications/notifications.controller'
 import { ConfigModule } from '@nestjs/config'
 import { APP_FILTER, APP_GUARD } from '@nestjs/core'
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'
@@ -34,6 +35,7 @@ import { UsersModule } from './users/users.module'
     AttachmentsModule,
     DirectoryModule,
     UsersModule,
+    NotificationsModule,
   ],
   providers: [
     BootstrapDataService,

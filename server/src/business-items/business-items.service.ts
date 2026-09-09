@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import type { Request } from 'express'
 import { AuditService } from '../audit/audit.service'
 import type { AuthenticatedUser } from '../common/authenticated-user'
+import { contactVisibilitySql, visibleRelationSnapshot } from '../common/contact-visibility'
 import { paginationMeta } from '../common/pagination.dto'
 import { DatabaseService, type DatabaseClient } from '../database/database.service'
 import {
@@ -19,6 +20,9 @@ interface ItemRow {
   itemType: 'visit' | 'task'
   isInternal: boolean
   status: string
+  revision: string
+  startsAt?: string
+  endsAt?: string
 }
 
 interface OrganizationSnapshot {
@@ -45,7 +49,7 @@ export class BusinessItemsService {
   ) {}
 
   async list(user: AuthenticatedUser, query: BusinessItemListQueryDto) {
-    const values: unknown[] = [user.departmentId]
+    const values: unknown[] = [user.departmentId, user.userId, ['admin', 'manager'].includes(user.role)]
     const filters = ['bi.department_id = $1', 'bi.deleted_at IS NULL']
     if (query.q?.trim()) {
       values.push(`%${query.q.trim()}%`)
@@ -69,7 +73,7 @@ export class BusinessItemsService {
     }
     if (query.contactId) {
       values.push(query.contactId)
-      filters.push(`EXISTS (SELECT 1 FROM business_item_contacts x WHERE x.business_item_id = bi.id AND x.contact_id = $${values.length})`)
+      filters.push(`EXISTS (SELECT 1 FROM business_item_contacts x JOIN contacts c ON c.id = x.contact_id WHERE x.business_item_id = bi.id AND x.contact_id = $${values.length} AND ${contactVisibilitySql('c', 1, 2, 3)})`)
     }
     if (query.dateFrom) {
       values.push(query.dateFrom)
@@ -84,11 +88,11 @@ export class BusinessItemsService {
     const offsetIndex = values.length
 
     const result = await this.database.query<BusinessItemListRow>(
-      `SELECT bi.id, bi.item_type AS "itemType", bi.title, bi.content, bi.result, bi.location,
+      `SELECT bi.id, bi.xmin::text AS revision, bi.item_type AS "itemType", bi.title, bi.content, bi.result, bi.location,
               bi.starts_at AS "startsAt", bi.ends_at AS "endsAt", bi.due_at AS "dueAt", bi.status,
               bi.priority, bi.is_internal AS "isInternal", bi.owner_user_id AS "ownerUserId",
               owner.display_name AS "ownerName", bi.source_item_id AS "sourceItemId",
-              bi.participant_names AS "participantNames", bi.details, bi.relation_snapshot AS "relationSnapshot",
+              bi.participant_names AS "participantNames", bi.details,
               bi.completed_at AS "completedAt", bi.created_at AS "createdAt", bi.updated_at AS "updatedAt",
               COALESCE(org_links.items, '[]'::jsonb) AS organizations,
               COALESCE(contact_links.items, '[]'::jsonb) AS contacts,
@@ -115,6 +119,7 @@ export class BusinessItemsService {
          ) AS items
          FROM business_item_contacts bic LEFT JOIN contacts c ON c.id = bic.contact_id
          WHERE bic.business_item_id = bi.id
+           AND ${contactVisibilitySql('c', 1, 2, 3)}
        ) contact_links ON TRUE
        WHERE ${filters.join(' AND ')}
        ORDER BY COALESCE(bi.starts_at, bi.due_at, bi.created_at) DESC, bi.created_at DESC
@@ -122,7 +127,7 @@ export class BusinessItemsService {
       values,
     )
     const total = result.rows[0]?.totalCount || 0
-    return { items: result.rows.map(({ totalCount: _total, ...row }) => row), meta: paginationMeta(total, query.page, query.pageSize) }
+    return { items: result.rows.map(({ totalCount: _total, ...row }) => visibleRelationSnapshot(row)), meta: paginationMeta(total, query.page, query.pageSize) }
   }
 
   async get(user: AuthenticatedUser, id: string) {
@@ -131,21 +136,27 @@ export class BusinessItemsService {
 
   private async getDirect(user: AuthenticatedUser, id: string) {
     const result = await this.database.query(
-      `SELECT bi.id, bi.item_type AS "itemType", bi.title, bi.content, bi.result, bi.location,
+      `SELECT bi.id, bi.xmin::text AS revision, bi.item_type AS "itemType", bi.title, bi.content, bi.result, bi.location,
               bi.starts_at AS "startsAt", bi.ends_at AS "endsAt", bi.due_at AS "dueAt", bi.status,
               bi.priority, bi.is_internal AS "isInternal", bi.owner_user_id AS "ownerUserId",
               owner.display_name AS "ownerName", bi.source_item_id AS "sourceItemId",
-              bi.participant_names AS "participantNames", bi.details, bi.relation_snapshot AS "relationSnapshot",
+              bi.participant_names AS "participantNames", bi.details,
               bi.completed_at AS "completedAt", bi.created_at AS "createdAt", bi.updated_at AS "updatedAt",
               COALESCE((SELECT jsonb_agg(jsonb_build_object('id', bio.organization_id, 'name', COALESCE(o.name, bio.snapshot->>'name'), 'shortName', COALESCE(o.short_name, bio.snapshot->>'shortName'), 'relationRole', bio.relation_role, 'snapshot', bio.snapshot)) FROM business_item_organizations bio LEFT JOIN organizations o ON o.id = bio.organization_id WHERE bio.business_item_id = bi.id), '[]') AS organizations,
-              COALESCE((SELECT jsonb_agg(jsonb_build_object('id', bic.contact_id, 'fullName', COALESCE(c.full_name, bic.snapshot->>'fullName'), 'mobile', COALESCE(c.mobile, bic.snapshot->>'mobile'), 'relationRole', bic.relation_role, 'snapshot', bic.snapshot)) FROM business_item_contacts bic LEFT JOIN contacts c ON c.id = bic.contact_id WHERE bic.business_item_id = bi.id), '[]') AS contacts,
+              COALESCE((SELECT jsonb_agg(jsonb_build_object('id', bic.contact_id, 'fullName', COALESCE(c.full_name, bic.snapshot->>'fullName'), 'mobile', COALESCE(c.mobile, bic.snapshot->>'mobile'), 'relationRole', bic.relation_role, 'snapshot', bic.snapshot)) FROM business_item_contacts bic JOIN contacts c ON c.id = bic.contact_id WHERE bic.business_item_id = bi.id AND ${contactVisibilitySql('c', 2, 3, 4)}), '[]') AS contacts,
               (SELECT COUNT(*)::int FROM attachments a WHERE a.business_item_id = bi.id AND a.status = 'active') AS "attachmentCount"
        FROM business_items bi JOIN users owner ON owner.id = bi.owner_user_id
        WHERE bi.id = $1 AND bi.department_id = $2 AND bi.deleted_at IS NULL`,
-      [id, user.departmentId],
+      [id, user.departmentId, user.userId, ['admin', 'manager'].includes(user.role)],
     )
     if (!result.rowCount) throw new NotFoundException('未找到事项')
-    return this.withAttachments(result.rows[0], id)
+    const events = await this.database.query(
+      `SELECT a.id, a.action, a.created_at AS "createdAt", u.display_name AS "actorName"
+       FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
+       WHERE a.department_id = $1 AND a.entity_type = 'business_item' AND a.entity_id = $2
+       ORDER BY a.created_at, a.id`, [user.departmentId, id],
+    )
+    return this.withAttachments({ ...visibleRelationSnapshot(result.rows[0]), events: events.rows }, id)
   }
 
   private async withAttachments<T extends Record<string, unknown>>(item: T, id: string) {
@@ -163,7 +174,13 @@ export class BusinessItemsService {
     const id = await this.database.transaction(async (client) => {
       const ownerUserId = dto.ownerUserId || user.userId
       await this.assertUser(client, user.departmentId, ownerUserId)
-      if (dto.sourceItemId) await this.assertItem(client, user.departmentId, dto.sourceItemId)
+      if (dto.sourceItemId) {
+        const source = await client.query(`SELECT id FROM business_items WHERE id = $1 AND department_id = $2 AND item_type = 'visit' AND deleted_at IS NULL FOR SHARE`, [dto.sourceItemId, user.departmentId])
+        if (!source.rowCount || dto.itemType !== 'task') throw new BadRequestException('来源必须是当前部门有效的拜访，且仅可生成待办')
+        dto.isInternal = false
+        dto.organizationIds = await this.currentOrganizationIds(client, dto.sourceItemId)
+        dto.contactIds = await this.currentContactIds(client, dto.sourceItemId)
+      }
       const snapshot = await this.buildSnapshot(client, user, dto.organizationIds, dto.contactIds)
 
       const result = await client.query<{ id: string }>(
@@ -172,10 +189,10 @@ export class BusinessItemsService {
            priority, is_internal, owner_user_id, source_item_id, participant_names, details, relation_snapshot,
            completed_at, created_by, updated_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::text[], $16::jsonb,
-                 $17::jsonb, CASE WHEN $10 = 'completed' THEN NOW() ELSE NULL END, $18, $18)
+                 $17::jsonb, CASE WHEN $10::varchar = 'completed' THEN NOW() ELSE NULL END, $18, $18)
          RETURNING id`,
         [
-          user.departmentId, dto.itemType, dto.title.trim(), dto.content?.trim() || null, dto.result?.trim() || null,
+          user.departmentId, dto.itemType, dto.title.trim(), dto.content ?? null, dto.result?.trim() || null,
           dto.location?.trim() || null, dto.startsAt || null, dto.endsAt || null, dto.dueAt || null, dto.status,
           dto.priority || null, dto.isInternal, ownerUserId, dto.sourceItemId || null,
           dto.participantNames.map((name) => name.trim()).filter(Boolean), JSON.stringify(dto.details), JSON.stringify(snapshot), user.userId,
@@ -191,15 +208,17 @@ export class BusinessItemsService {
 
   async update(user: AuthenticatedUser, id: string, dto: UpdateBusinessItemDto, request?: Request) {
     const current = await this.itemRow(user, id)
-    const updatedIsInternal = dto.isInternal ?? current.isInternal
-    const updatedStatus = dto.status ?? current.status
     await this.database.transaction(async (client) => {
       const locked = await client.query<ItemRow>(
-        `SELECT id, item_type AS "itemType", is_internal AS "isInternal", status
+        `SELECT id, xmin::text AS revision, starts_at AS "startsAt", ends_at AS "endsAt", item_type AS "itemType", is_internal AS "isInternal", status
          FROM business_items WHERE id = $1 AND department_id = $2 AND deleted_at IS NULL FOR UPDATE`,
         [id, user.departmentId],
       )
       if (!locked.rowCount) throw new NotFoundException('未找到事项')
+      if (current.itemType === 'visit' && !dto.expectedRevision) throw new ConflictException('请重新打开拜访后编辑，缺少版本信息')
+      if (dto.expectedRevision && dto.expectedRevision !== locked.rows[0].revision) throw new ConflictException('记录已被其他操作修改，请保留输入并重新打开最新记录核对，未覆盖任何修改')
+      const updatedIsInternal = dto.isInternal ?? locked.rows[0].isInternal
+      const updatedStatus = dto.status ?? locked.rows[0].status
       if (dto.ownerUserId) await this.assertUser(client, user.departmentId, dto.ownerUserId)
       if (dto.sourceItemId) await this.assertItem(client, user.departmentId, dto.sourceItemId)
 
@@ -209,17 +228,19 @@ export class BusinessItemsService {
       if (contactIds === undefined) contactIds = await this.currentContactIds(client, id)
       const relationError = relationPolicyError({ isInternal: updatedIsInternal, organizationIds, contactIds })
       if (relationError) throw new BadRequestException(relationError)
-      this.validateItem(current.itemType, updatedStatus, { ...dto, isInternal: updatedIsInternal, organizationIds, contactIds })
+      this.validateItem(current.itemType, updatedStatus, { ...dto, startsAt: dto.startsAt === undefined ? locked.rows[0].startsAt : dto.startsAt, endsAt: dto.endsAt === undefined ? locked.rows[0].endsAt : dto.endsAt, isInternal: updatedIsInternal, organizationIds, contactIds })
 
       const linksChanged = dto.organizationIds !== undefined || dto.contactIds !== undefined
+      // Never silently remove hidden private contacts when an editor submits a filtered relation list.
+      if (linksChanged) await this.buildSnapshot(client, user, [], await this.currentContactIds(client, id))
       const snapshot = linksChanged ? await this.buildSnapshot(client, user, organizationIds, contactIds) : undefined
       const columns: Record<string, unknown> = {
-        title: dto.title?.trim(), content: dto.content?.trim(), result: dto.result?.trim(), location: dto.location?.trim(),
+        title: dto.title?.trim(), content: dto.content, result: dto.result?.trim(), location: dto.location?.trim(),
         starts_at: dto.startsAt, ends_at: dto.endsAt, due_at: dto.dueAt, status: dto.status, priority: dto.priority,
         is_internal: dto.isInternal, owner_user_id: dto.ownerUserId, source_item_id: dto.sourceItemId,
         participant_names: dto.participantNames, details: dto.details ? JSON.stringify(dto.details) : undefined,
         relation_snapshot: snapshot ? JSON.stringify(snapshot) : undefined,
-        completed_at: dto.status === 'completed' ? new Date() : dto.status ? null : undefined,
+        completed_at: dto.status === 'completed' ? (locked.rows[0].status === 'completed' ? undefined : new Date()) : dto.status ? null : undefined,
       }
       const entries = Object.entries(columns).filter(([, value]) => value !== undefined)
       if (entries.length) {
@@ -257,8 +278,9 @@ export class BusinessItemsService {
          FROM contact_affiliations ca JOIN organizations o ON o.id = ca.organization_id AND o.deleted_at IS NULL
          JOIN contacts c ON c.id = ca.contact_id
          WHERE ca.contact_id = $1 AND c.department_id = $2 AND ca.status = 'current' AND ca.deleted_at IS NULL
+           AND o.department_id = $2 AND ${contactVisibilitySql('c', 2, 3, 4)}
          ORDER BY ca.is_primary DESC, o.name`,
-        [query.contactId, user.departmentId],
+        [query.contactId, user.departmentId, user.userId, ['admin', 'manager'].includes(user.role)],
       )
       : { rows: [] }
     const contacts = query.organizationId
@@ -267,8 +289,9 @@ export class BusinessItemsService {
          FROM contact_affiliations ca JOIN contacts c ON c.id = ca.contact_id AND c.deleted_at IS NULL
          JOIN organizations o ON o.id = ca.organization_id
          WHERE ca.organization_id = $1 AND o.department_id = $2 AND ca.status = 'current' AND ca.deleted_at IS NULL
+           AND o.deleted_at IS NULL AND ${contactVisibilitySql('c', 2, 3, 4)}
          ORDER BY ca.is_primary DESC, c.full_name`,
-        [query.organizationId, user.departmentId],
+        [query.organizationId, user.departmentId, user.userId, ['admin', 'manager'].includes(user.role)],
       )
       : { rows: [] }
     return { organizations: organizations.rows, contacts: contacts.rows }

@@ -1,0 +1,15 @@
+const assert=require('node:assert/strict');
+const {chromium}=require(process.env.QA_PLAYWRIGHT_PATH||'playwright');
+(async()=>{const browser=await chromium.launch({channel:'msedge',headless:true});try{
+ for(const width of [360,1440]){
+  const page=await browser.newPage({viewport:{width,height:840}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto('http://192.168.0.253:8088/');await page.getByLabel('用户名',{exact:true}).waitFor();
+  assert.equal(await page.locator('.login-brand-panel').isVisible(),width>980);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+  await page.goto('http://192.168.0.253:8088/downloads/');
+  const link=page.locator('#download');await link.waitFor({state:'visible'});
+  assert.ok((await link.getAttribute('href')).endsWith('/downloads/department-steward-0.2.5.apk'));
+  assert.deepEqual(errors,[]);console.log(`PASS production ${width}: login layout, no overflow, download 0.2.5 link, no page errors`);
+  await page.close();
+ }
+}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});

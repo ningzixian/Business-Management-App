@@ -12,6 +12,16 @@ export interface PageResponse<T> {
   meta: { total: number; page: number; pageSize: number; pageCount: number }
 }
 
+export async function fetchAllPages<T>(path: string): Promise<PageResponse<T>> {
+  const first = await apiRequest<PageResponse<T>>(`${path}?pageSize=100&page=1`)
+  const items = [...first.items]
+  for (let page = 2; page <= first.meta.pageCount; page += 1) {
+    const next = await apiRequest<PageResponse<T>>(`${path}?pageSize=100&page=${page}`)
+    items.push(...next.items)
+  }
+  return { ...first, items }
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -89,7 +99,8 @@ export async function changePassword(currentPassword: string, newPassword: strin
 export async function restoreSession() {
   if (!session) return null
   try {
-    await apiRequest<{ user: SessionUser }>('/auth/me')
+    const current = await apiRequest<{ user: SessionUser }>('/auth/me')
+    if (session) saveSession({ ...session, user: current.user })
     return session
   } catch {
     saveSession(null)
@@ -111,7 +122,8 @@ export async function logout() {
   }
 }
 
-export async function apiRequest<T = unknown>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
+export interface ApiRequestOptions extends RequestInit { responseType?: 'blob'; timeoutMs?: number }
+export async function apiRequest<T = unknown>(path: string, init: ApiRequestOptions = {}, retry = true): Promise<T> {
   const headers = new Headers(init.headers)
   if (!(init.body instanceof FormData) && init.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
@@ -152,20 +164,30 @@ async function refreshSession() {
   return refreshInFlight
 }
 
-async function rawRequest<T>(path: string, init: RequestInit): Promise<T> {
-  let response: Response
+async function rawRequest<T>(path: string, init: ApiRequestOptions): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), init.timeoutMs || 20000)
+  const cancel = () => controller.abort()
+  if (init.signal?.aborted) controller.abort()
+  init.signal?.addEventListener('abort', cancel, { once: true })
   try {
-    response = await fetch(`${API_BASE}${path}`, init)
-  } catch {
-    throw new ApiError('无法连接业务服务，请检查网络或服务地址', 0)
+    const response = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal })
+    const contentType = response.headers.get('content-type') || ''
+    if (response.ok && init.responseType === 'blob') return await response.blob() as T
+    const data = contentType.includes('application/json') ? await response.json() as unknown : await response.text()
+    if (!response.ok) {
+      const payload = data as { message?: string | string[] }
+      const message = Array.isArray(payload?.message) ? payload.message.join('；') : payload?.message
+      throw new ApiError(message || `请求失败（${response.status}）`, response.status, data)
+    }
+    return data as T
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    const message = controller.signal.aborted ? '请求超时或已取消' : '无法连接业务服务或读取响应'
+    const hint = init.method && init.method !== 'GET' ? '；保存结果未确认，请刷新核实后再重试' : '，请检查网络后重试'
+    throw new ApiError(message + hint, controller.signal.aborted ? 408 : 0)
+  } finally {
+    clearTimeout(timer)
+    init.signal?.removeEventListener('abort', cancel)
   }
-
-  const contentType = response.headers.get('content-type') || ''
-  const data = contentType.includes('application/json') ? await response.json() as unknown : await response.text()
-  if (!response.ok) {
-    const payload = data as { message?: string | string[] }
-    const message = Array.isArray(payload?.message) ? payload.message.join('；') : payload?.message
-    throw new ApiError(message || `请求失败（${response.status}）`, response.status, data)
-  }
-  return data as T
 }

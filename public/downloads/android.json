@@ -1,0 +1,8 @@
+{
+  "versionCode": 7,
+  "versionName": "0.2.5",
+  "path": "/downloads/department-steward-0.2.5.apk",
+  "size": 4291362,
+  "sha256": "78FD468960A264B4F6BC580707B20BC316DA03A8A22AF979ED496542FB191D47",
+  "notes": "更新APP专用登录页、底部导航及侧边菜单动画；修复旧版WebView布局、加载页居中和输入框样式；完善附件、待办及通知交互。启动自动检查更新，校验安装包后由系统确认安装，请勿卸载旧版。"
+}

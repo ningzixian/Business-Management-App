@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react'
+import { BusinessClock, BusinessSession, OpenSourceVisit, useLiveClock } from './business-clock'
+import { useNotifications } from './notifications'
+import { MobileMenuLayer } from './mobile-menu-layer'
+import { TaskPreview } from './task-preview'
+import { currentTask, isOpen, itemRegion } from './business-metrics'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import {
   BarChart3,
   Bell,
@@ -19,7 +24,7 @@ import {
   Settings,
   X,
 } from 'lucide-react'
-import { apiRequest, getSession, login, logout, register, restoreSession, type PageResponse } from './api'
+import { apiRequest, fetchAllPages, getSession, login, logout, register, restoreSession } from './api'
 import {
   toContact,
   toCustomer,
@@ -53,6 +58,7 @@ import { MobileSettingsPage, SettingsPage } from './settings-pages'
 import type { Contact, Customer, EntityId, PageKey, SessionUser, Task, Visit } from './types'
 import { InitialAvatar } from './ui'
 import { useMobileLayout } from './use-mobile-layout'
+import { WriteAccess, WriteButton } from './write-access'
 
 interface NavItem {
   id: PageKey
@@ -72,8 +78,8 @@ const demoMode = import.meta.env.VITE_DEMO_MODE === 'true'
 
 const primaryNav: NavItem[] = [
   { id: 'dashboard', label: '工作台', icon: LayoutDashboard },
-  { id: 'organizations', label: '甲方组织库', icon: Building2 },
-  { id: 'contacts', label: '人脉库', icon: ContactRound },
+  { id: 'organizations', label: '组织', icon: Building2 },
+  { id: 'contacts', label: '人脉', icon: ContactRound },
   { id: 'visits', label: '拜访', icon: MapPinned },
   { id: 'tasks', label: '待办', icon: ListTodo },
   { id: 'calendar', label: '日历', icon: CalendarDays },
@@ -82,16 +88,16 @@ const primaryNav: NavItem[] = [
 
 const mobileNav: NavItem[] = [
   { id: 'dashboard', label: '工作台', icon: LayoutDashboard },
-  { id: 'organizations', label: '组织', icon: Building2 },
-  { id: 'contacts', label: '人脉', icon: ContactRound },
   { id: 'visits', label: '拜访', icon: MapPinned },
   { id: 'tasks', label: '待办', icon: ListTodo },
+  { id: 'calendar', label: '日历', icon: CalendarDays },
+  { id: 'reports', label: '统计', icon: BarChart3 },
 ]
 
 const pageTitles: Record<PageKey, string> = {
   dashboard: '工作台',
-  organizations: '甲方组织库',
-  contacts: '人脉库',
+  organizations: '组织',
+  contacts: '人脉',
   visits: '拜访',
   tasks: '待办',
   calendar: '日历',
@@ -135,15 +141,19 @@ function reopenedTaskStatus(task: Task): Task['status'] {
 
 export default function App() {
   const [page, setPage] = useState<PageKey>('dashboard')
-  const [visits, setVisits] = useState<Visit[]>(() => demoMode ? readStored('bam-visits-v2', initialVisits) : [])
-  const [tasks, setTasks] = useState<Task[]>(() => demoMode ? readStored('bam-tasks', initialTasks) : [])
+  const [storedVisits, setVisits] = useState<Visit[]>(() => demoMode ? readStored('bam-visits-v2', initialVisits) : [])
+  const [storedTasks, setTasks] = useState<Task[]>(() => demoMode ? readStored('bam-tasks', initialTasks) : [])
   const [organizationList, setOrganizationList] = useState<Customer[]>(() => demoMode ? readStored('bam-customers', seedCustomers) : [])
   const [contactList, setContactList] = useState<Contact[]>(() => demoMode ? readStored('bam-contacts-v0.2', demoContacts(seedCustomers)) : [])
   const [selectedVisit, setSelectedVisit] = useState<Visit | null>(null)
+  const [editingVisit, setEditingVisit] = useState<Visit | null>(null)
+  const [sourceVisit, setSourceVisit] = useState<Visit | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [createKind, setCreateKind] = useState<CreateKind>('visit')
   const [searchQuery, setSearchQuery] = useState('')
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [notificationTask, setNotificationTask] = useState<Task | null>(null)
+  const notificationRef = useRef<HTMLDivElement>(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(() => demoMode ? demoUser : getSession()?.user || null)
@@ -151,34 +161,87 @@ export default function App() {
   const [dataLoading, setDataLoading] = useState(!demoMode)
   const [dataError, setDataError] = useState('')
   const isMobileLayout = useMobileLayout()
+  const now = useLiveClock()
+  const visits = useMemo(() => storedVisits.map(visit => ({ ...visit, region: itemRegion(visit, organizationList) })), [storedVisits, organizationList])
+  const tasks = useMemo(() => storedTasks.map(task => currentTask(task, now)), [storedTasks, now])
+  const notices = useNotifications(sessionUser, demoMode, storedTasks)
+  useEffect(() => {
+    const back = (event: Event) => {
+      if (notificationsOpen || mobileMenuOpen || page !== 'dashboard') {
+        event.preventDefault()
+        if (notificationsOpen) setNotificationsOpen(false)
+        else if (mobileMenuOpen) setMobileMenuOpen(false)
+        else setPage('dashboard')
+      }
+    }
+    window.addEventListener('bam-native-back', back)
+    return () => window.removeEventListener('bam-native-back', back)
+  }, [notificationsOpen, mobileMenuOpen, page])
+  const canWrite = sessionUser !== null && sessionUser.role !== 'readonly'
+  const pendingTasks = useRef(new Set<EntityId>())
+  const [writeBusy, setWriteBusy] = useState(false)
+  const sessionIdentity = useRef(sessionUser ? `${sessionUser.userId}:${sessionUser.departmentId}:${sessionUser.role}` : '')
+  const loadGeneration = useRef(0)
+
+  useEffect(() => {
+    if (demoMode || !selectedVisit) return
+    let active = true
+    const id = selectedVisit.id
+    const identity = sessionIdentity.current
+    void apiRequest<ApiBusinessItem>(`/business-items/${id}`).then(item => {
+      if (active && identity === sessionIdentity.current) setSelectedVisit(current => current?.id === id ? toVisit(item) : current)
+    }).catch(reason => { if (active) setToast(`详情加载失败：${reason instanceof Error ? reason.message : '请重试'}`) })
+    return () => { active = false }
+  }, [selectedVisit?.id])
+
+  function assertCanWrite() {
+    if (!canWrite) throw new Error('当前账号为只读账号，不能修改业务数据')
+    const current = demoMode ? sessionUser : getSession()?.user
+    if (!current || current.userId !== sessionUser?.userId || current.departmentId !== sessionUser?.departmentId || current.role !== sessionUser?.role) {
+      throw new Error('登录身份已变化，请重新打开表单')
+    }
+  }
 
   const loadRemoteData = useCallback(async (showLoading = true) => {
     if (demoMode) return
+    const requestingUser = getSession()?.user.userId
+    const generation = ++loadGeneration.current
     if (showLoading) setDataLoading(true)
     setDataError('')
     try {
       const [organizationResponse, contactResponse, itemResponse] = await Promise.all([
-        apiRequest<PageResponse<ApiOrganization>>('/organizations?pageSize=100'),
-        apiRequest<PageResponse<ApiContact>>('/contacts?pageSize=100'),
-        apiRequest<PageResponse<ApiBusinessItem>>('/business-items?pageSize=100'),
+        fetchAllPages<ApiOrganization>('/organizations'),
+        fetchAllPages<ApiContact>('/contacts'),
+        fetchAllPages<ApiBusinessItem>('/business-items'),
       ])
       const items = itemResponse.items
+      if (getSession()?.user.userId !== requestingUser || loadGeneration.current !== generation) return
       setOrganizationList(organizationResponse.items.map((organization) => toCustomer(organization, items)))
       setContactList(contactResponse.items.map(toContact))
       setVisits(items.filter((item) => item.itemType === 'visit').map(toVisit))
       setTasks(items.filter((item) => item.itemType === 'task').map(toTask))
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : '数据加载失败'
-      setDataError(message)
-      throw reason
+      if (loadGeneration.current === generation) setDataError(message)
     } finally {
-      setDataLoading(false)
+      if (loadGeneration.current === generation) setDataLoading(false)
     }
   }, [])
 
   useEffect(() => {
     if (demoMode) return
-    const updateSession = (event: Event) => setSessionUser((event as CustomEvent).detail?.user || null)
+    const updateSession = (event: Event) => {
+      const next = (event as CustomEvent).detail?.user || null
+      const identity = next ? `${next.userId}:${next.departmentId}:${next.role}` : ''
+      if (sessionIdentity.current !== identity) {
+        sessionIdentity.current = identity
+        loadGeneration.current++
+        setOrganizationList([]); setContactList([]); setVisits([]); setTasks([])
+        setSelectedVisit(null); setEditingVisit(null); setSourceVisit(null); setCreateOpen(false); setSearchQuery(''); setDataError('')
+        setDataLoading(Boolean(next))
+      }
+      setSessionUser(next)
+    }
     window.addEventListener('bam-auth-change', updateSession)
     void restoreSession().then((restored) => setSessionUser(restored?.user || null)).finally(() => setAuthReady(true))
     return () => window.removeEventListener('bam-auth-change', updateSession)
@@ -205,6 +268,15 @@ export default function App() {
     const timer = window.setTimeout(() => setToast(''), 2600)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    if (!notificationsOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!notificationRef.current?.contains(event.target as Node)) setNotificationsOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+  }, [notificationsOpen])
 
   const searchResults = useMemo<SearchResult[]>(() => {
     const normalized = searchQuery.trim().toLowerCase()
@@ -236,11 +308,31 @@ export default function App() {
   }
 
   function openCreate(kind: CreateKind) {
+    if (!canWrite) return
+    setEditingVisit(null); setSourceVisit(null)
     setCreateKind(kind)
     setCreateOpen(true)
   }
 
   async function addVisit(visit: Visit) {
+    assertCanWrite()
+    if (editingVisit) {
+      let updated = visit
+      if (!demoMode) {
+        updated = toVisit(await apiRequest<ApiBusinessItem>(`/business-items/${visit.id}`, { method: 'PATCH', body: JSON.stringify({
+          expectedRevision: editingVisit.revision, title: visit.matter.slice(0, 80), content: visit.matter,
+          status: ({ '待开始': 'planned', '进行中': 'in_progress', '已完成': 'completed', '已延期': 'postponed', '已取消': 'cancelled' } as const)[visit.status],
+          result: visit.result, location: visit.location, startsAt: new Date(`${visit.date}T${visit.time}:00`).toISOString(),
+          endsAt: visit.endTime ? new Date(`${visit.date}T${visit.endTime}:00`).toISOString() : null,
+          participantNames: visit.participants, organizationIds: visit.organizationIds || [], contactIds: visit.contactIds || [],
+        }) }))
+      }
+      assertCanWrite()
+      setVisits(current => current.map(item => item.id === visit.id ? updated : item))
+      setSelectedVisit(updated); setEditingVisit(null); setCreateOpen(false); setToast('拜访修改已保存')
+      return
+    }
+    visit = { ...visit, ownerUserId: sessionUser?.userId, createdAt: now.toISOString(), owner: sessionUser?.displayName || visit.owner }
     if (demoMode) {
       setVisits((current) => [visit, ...current])
     } else {
@@ -263,6 +355,7 @@ export default function App() {
           details: { createdFrom: isMobileLayout ? 'mobile' : 'web' },
         }),
       })
+      assertCanWrite()
       setVisits((current) => [toVisit(created), ...current])
     }
     setCreateOpen(false)
@@ -271,6 +364,8 @@ export default function App() {
   }
 
   async function addTask(task: Task) {
+    assertCanWrite()
+    task = { ...task, ownerUserId: sessionUser?.userId, createdAt: now.toISOString(), assignee: sessionUser?.displayName || task.assignee }
     if (demoMode) {
       setTasks((current) => [task, ...current])
     } else {
@@ -279,7 +374,9 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           itemType: 'task',
+          sourceItemId: task.sourceItemId,
           title: task.title,
+          content: task.content || '',
           dueAt: new Date(`${task.due}T${time}:00`).toISOString(),
           status: 'pending',
           priority: ({ 高: 'high', 中: 'medium', 低: 'low' } as const)[task.priority],
@@ -289,6 +386,7 @@ export default function App() {
           details: { createdFrom: isMobileLayout ? 'mobile' : 'web' },
         }),
       })
+      assertCanWrite()
       setTasks((current) => [toTask(created), ...current])
     }
     setCreateOpen(false)
@@ -297,6 +395,7 @@ export default function App() {
   }
 
   async function addOrganization(organization: Customer) {
+    assertCanWrite()
     if (demoMode) {
       setOrganizationList((current) => [organization, ...current])
     } else {
@@ -305,12 +404,15 @@ export default function App() {
         body: JSON.stringify({
           name: organization.name,
           shortName: organization.shortName,
+          parentOrganizationId: organization.parentOrganizationId || null,
+          organizationType: organization.organizationType || 'company',
           industry: organization.industry,
           region: organization.region,
           status: organization.status === '重点跟进' ? 'key' : 'normal',
           source: '界面新增',
         }),
       })
+      assertCanWrite()
       setOrganizationList((current) => [toCustomer({ ...created, contactCount: created.contactCount || 0, itemCount: created.itemCount || 0 }, []), ...current])
     }
     setCreateOpen(false)
@@ -318,7 +420,16 @@ export default function App() {
     setToast('甲方组织已添加')
   }
 
+  async function updateHierarchy(id: string, parentId: string | null) {
+    assertCanWrite()
+    if (!demoMode) await apiRequest(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify({ parentOrganizationId: parentId }) })
+    assertCanWrite()
+    setOrganizationList((current) => current.map((org) => String(org.id) === id ? { ...org, parentOrganizationId: parentId, parentOrganizationName: current.find((parent) => String(parent.id) === parentId)?.name || null } : org))
+    setToast('组织层级已更新')
+  }
+
   async function addContact(contact: Contact) {
+    assertCanWrite()
     if (demoMode) {
       setContactList((current) => [contact, ...current])
     } else {
@@ -347,6 +458,7 @@ export default function App() {
           affiliations,
         }),
       })
+      assertCanWrite()
       setContactList((current) => [toContact({ ...created, affiliationCount: created.affiliationCount || affiliations.length, itemCount: created.itemCount || 0 }), ...current])
     }
     setCreateOpen(false)
@@ -355,17 +467,28 @@ export default function App() {
   }
 
   async function toggleTask(taskId: EntityId) {
+    if (!canWrite || pendingTasks.current.has(taskId)) return
     const task = tasks.find((item) => item.id === taskId)
     if (!task) return
+    pendingTasks.current.add(taskId)
+    setWriteBusy(true)
+    try {
     const nextStatus = task.status === '已完成' ? reopenedTaskStatus(task) : '已完成'
     if (demoMode) {
-      setTasks((current) => current.map((item) => item.id === taskId ? { ...item, status: nextStatus } : item))
+      setTasks((current) => current.map((item) => item.id === taskId ? { ...item, status: nextStatus, completedAt: nextStatus === '已完成' ? now.toISOString() : undefined } : item))
     } else {
       const apiStatus = nextStatus === '已完成' ? 'completed' : nextStatus === '已逾期' ? 'overdue' : 'pending'
       const updated = await apiRequest<ApiBusinessItem>(`/business-items/${taskId}`, { method: 'PATCH', body: JSON.stringify({ status: apiStatus }) })
+      assertCanWrite()
       setTasks((current) => current.map((item) => item.id === taskId ? toTask(updated) : item))
     }
     setToast('待办状态已更新')
+    } catch (reason) {
+      setToast(`操作失败，界面保留原状态：${reason instanceof Error ? reason.message : '请稍后重试'}`)
+    } finally {
+      pendingTasks.current.delete(taskId)
+      setWriteBusy(pendingTasks.current.size > 0)
+    }
   }
 
   async function handleLogin(username: string, password: string) {
@@ -384,15 +507,20 @@ export default function App() {
       setToast('演示模式不退出登录')
       return
     }
-    await logout()
-    setSessionUser(null)
+    try {
+      await logout()
+    } catch {
+      setToast('本机已退出；服务器会话注销未确认')
+    } finally {
+      setSessionUser(null)
+    }
   }
 
   function renderPage() {
     if (isMobileLayout) {
       switch (page) {
         case 'organizations':
-          return <MobileCustomersPage customers={organizationList} onCreate={() => openCreate('organization')} onCreateVisit={() => openCreate('visit')} />
+          return <MobileCustomersPage customers={organizationList} onCreate={() => openCreate('organization')} onCreateVisit={() => openCreate('visit')} onUpdateHierarchy={sessionUser?.role === 'readonly' ? undefined : updateHierarchy} />
         case 'contacts':
           return <MobileContactsPage contacts={contactList} onCreate={() => openCreate('contact')} onCreateVisit={() => openCreate('visit')} />
         case 'visits':
@@ -402,7 +530,7 @@ export default function App() {
         case 'calendar':
           return <MobileCalendarPage visits={visits} tasks={tasks} onCreate={() => openCreate('visit')} onSelectVisit={setSelectedVisit} />
         case 'reports':
-          return <MobileReportsPage />
+          return <MobileReportsPage visits={visits} tasks={tasks} customers={organizationList} onNotify={setToast} />
         case 'settings':
           return <MobileSettingsPage user={sessionUser!} demoMode={demoMode} onLogout={() => void handleLogout()} onNotify={setToast} />
         default:
@@ -412,21 +540,21 @@ export default function App() {
 
     switch (page) {
       case 'organizations':
-        return <CustomersPage customers={organizationList} onCreate={() => openCreate('organization')} />
+        return <CustomersPage customers={organizationList} onCreate={() => openCreate('organization')} onNotify={setToast} onUpdateHierarchy={sessionUser?.role === 'readonly' ? undefined : updateHierarchy} />
       case 'contacts':
         return <ContactsPage contacts={contactList} onCreate={() => openCreate('contact')} />
       case 'visits':
-        return <VisitsPage visits={visits} onCreate={() => openCreate('visit')} onSelectVisit={setSelectedVisit} />
+        return <VisitsPage visits={visits} onCreate={() => openCreate('visit')} onSelectVisit={setSelectedVisit} onNotify={setToast} />
       case 'tasks':
-        return <TasksPage tasks={tasks} onToggleTask={(id) => void toggleTask(id)} onCreate={() => openCreate('task')} />
+        return <TasksPage tasks={tasks} onToggleTask={(id) => void toggleTask(id)} onCreate={() => openCreate('task')} onNotify={setToast} />
       case 'calendar':
-        return <CalendarPage visits={visits} onSelectVisit={setSelectedVisit} />
+        return <CalendarPage visits={visits} tasks={tasks} onSelectVisit={setSelectedVisit} onCreate={() => openCreate('visit')} />
       case 'reports':
-        return <ReportsPage />
+        return <ReportsPage visits={visits} tasks={tasks} customers={organizationList} onNotify={setToast} />
       case 'settings':
         return <SettingsPage user={sessionUser!} demoMode={demoMode} onLogout={() => void handleLogout()} onNotify={setToast} />
       default:
-        return <DashboardPage visits={visits} tasks={tasks} displayName={sessionUser?.displayName || '同事'} onCreate={openCreate} onSelectVisit={setSelectedVisit} onToggleTask={(id) => void toggleTask(id)} />
+        return <DashboardPage visits={visits} tasks={tasks} customers={organizationList} displayName={sessionUser?.displayName || '同事'} onCreate={openCreate} onSelectVisit={setSelectedVisit} onToggleTask={(id) => void toggleTask(id)} onNavigate={navigate} onNotify={setToast} />
     }
   }
 
@@ -438,7 +566,11 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <BusinessClock.Provider value={now}><BusinessSession.Provider value={sessionUser}><OpenSourceVisit.Provider value={id => {
+      const source = visits.find(visit => String(visit.id) === id)
+      if (source) setSelectedVisit(source)
+      else setToast('来源拜访已删除或当前账号不可访问')
+    }}><WriteAccess.Provider value={{ canWrite, busy: writeBusy }}><div className="app-shell">
       <aside className="sidebar" aria-label="主导航">
         <div className="brand-block"><span className="brand-mark"><ClipboardList size={22} /></span><span className="brand-copy"><strong>商务活动管理</strong><small>部门业务协作平台 · v0.2.0</small></span></div>
         <nav className="sidebar-nav">
@@ -446,7 +578,7 @@ export default function App() {
           {primaryNav.map((item) => (
             <button className={page === item.id ? 'is-active' : ''} type="button" key={item.id} onClick={() => navigate(item.id)}>
               <item.icon size={19} strokeWidth={1.9} /><span>{item.label}</span>
-              {item.id === 'tasks' && tasks.filter((task) => task.status !== '已完成').length ? <b>{tasks.filter((task) => task.status !== '已完成').length}</b> : null}
+              {item.id === 'tasks' && tasks.filter(isOpen).length ? <b>{tasks.filter(isOpen).length}</b> : null}
             </button>
           ))}
         </nav>
@@ -461,8 +593,12 @@ export default function App() {
           <div className="mobile-brand"><button className="icon-button menu-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开菜单"><Menu size={21} /></button><span className="brand-mark"><ClipboardList size={19} /></span><span><strong>部门小管家</strong><small>{pageTitles[page]}</small></span></div>
           <label className="global-search"><Search size={18} /><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} type="search" placeholder="搜索组织、人脉、拜访或待办" /><kbd>Ctrl K</kbd></label>
           <div className="topbar-actions">
-            <button className="date-button" type="button"><CalendarDays size={17} /><span>{new Intl.DateTimeFormat('zh-CN', { dateStyle: 'long' }).format(new Date())}</span><ChevronDown size={14} /></button>
-            <div className="notification-wrap"><button className="icon-button notification-button" type="button" onClick={() => setNotificationsOpen((value) => !value)} aria-label="通知"><Bell size={19} />{tasks.some((task) => task.status === '已逾期') ? <b>{tasks.filter((task) => task.status === '已逾期').length}</b> : null}</button>{notificationsOpen ? <NotificationPopover onClose={() => setNotificationsOpen(false)} /> : null}</div>
+            <button className="date-button" type="button" onClick={() => navigate('calendar')}><CalendarDays size={17} /><span>{new Intl.DateTimeFormat('zh-CN', { dateStyle: 'long' }).format(new Date())}</span><ChevronDown size={14} /></button>
+            <div className="notification-wrap" ref={notificationRef}><button className="icon-button notification-button" type="button" onClick={() => { setNotificationsOpen((value) => !value); void notices.refresh() }} aria-label="通知" aria-expanded={notificationsOpen}><Bell size={19} />{notices.unread ? <b>{notices.unread}</b> : null}</button>{notificationsOpen ? <NotificationPopover notices={notices} onClose={() => setNotificationsOpen(false)} onOpen={async id => {
+              const identity = sessionIdentity.current
+              try { const item = await apiRequest<ApiBusinessItem>(`/business-items/${id}`); if (identity !== sessionIdentity.current) return; setNotificationTask(toTask(item)); setNotificationsOpen(false) }
+              catch (reason) { setToast(`通知对应记录无法打开：${reason instanceof Error ? reason.message : '请重试'}`) }
+            }} /> : null}</div>
             <button className="topbar-user" type="button" onClick={() => navigate('settings')}><InitialAvatar text={sessionUser.displayName} size="small" /><span>{sessionUser.displayName}</span><ChevronDown size={14} /></button>
           </div>
           {searchQuery ? (
@@ -482,25 +618,27 @@ export default function App() {
 
       <nav className="mobile-bottom-nav" aria-label="移动端导航">
         {mobileNav.map((item) => (
-          <button className={page === item.id || (page === 'calendar' && item.id === 'visits') || (page === 'reports' && item.id === 'dashboard') ? 'is-active' : ''} type="button" key={item.id} onClick={() => navigate(item.id)}>
+          <button className={page === item.id ? 'is-active' : ''} type="button" key={item.id} onClick={() => navigate(item.id)}>
             <item.icon size={20} strokeWidth={1.9} /><span>{item.label}</span>
             {item.id === 'tasks' && tasks.filter((task) => task.status === '已逾期').length ? <b>{tasks.filter((task) => task.status === '已逾期').length}</b> : null}
           </button>
         ))}
       </nav>
-      <button className="mobile-fab" type="button" onClick={() => openCreate('visit')} aria-label="新建记录"><Plus size={25} /></button>
+      <WriteButton className="mobile-fab" type="button" onClick={() => openCreate('visit')} aria-label="新建记录"><Plus size={25} /></WriteButton>
 
-      {mobileMenuOpen ? (
-        <div className="mobile-menu-backdrop" role="presentation" onMouseDown={() => setMobileMenuOpen(false)}>
-          <aside className="mobile-menu" onMouseDown={(event) => event.stopPropagation()}>
-            <header><div><span className="brand-mark"><ClipboardList size={20} /></span><strong>部门小管家</strong></div><button className="icon-button" type="button" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button></header>
+        <MobileMenuLayer open={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)}>
+          <aside role="dialog" aria-modal="true" aria-label="导航菜单" className="mobile-menu" onMouseDown={(event) => event.stopPropagation()}>
+            <header><div><span className="brand-mark"><ClipboardList size={20} /></span><strong>部门小管家</strong></div><button className="icon-button" type="button" aria-label="关闭菜单" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button></header>
             <nav>{primaryNav.map((item) => <button className={page === item.id ? 'is-active' : ''} type="button" key={item.id} onClick={() => navigate(item.id)}><item.icon size={19} />{item.label}</button>)}<button type="button" onClick={() => navigate('settings')}><Settings size={19} />我的设置</button><button type="button" onClick={() => void handleLogout()}><LogOut size={19} />退出登录</button></nav>
           </aside>
-        </div>
-      ) : null}
+        </MobileMenuLayer>
 
+      <TaskPreview task={notificationTask} onClose={() => setNotificationTask(null)} />
       <CreateRecordModal
-        open={createOpen}
+        key={`${sessionUser.userId}:${editingVisit?.id || 'new'}:${sourceVisit?.id || ''}`}
+        editingVisit={editingVisit}
+        sourceVisit={sourceVisit}
+        open={createOpen && canWrite}
         initialKind={createKind}
         onClose={() => setCreateOpen(false)}
         onAddVisit={addVisit}
@@ -509,10 +647,14 @@ export default function App() {
         onAddContact={addContact}
         organizations={organizationList}
         contacts={contactList}
+        onNotify={setToast}
       />
-      <VisitDetailDrawer visit={selectedVisit} onClose={() => setSelectedVisit(null)} onCreateTask={() => { setSelectedVisit(null); openCreate('task') }} />
-      {toast ? <div className="toast"><CheckCircle2 size={18} />{toast}</div> : null}
-    </div>
+      <VisitDetailDrawer visit={selectedVisit} tasks={tasks} onClose={() => setSelectedVisit(null)} onEdit={() => {
+        if (!demoMode && !selectedVisit?.events) { setToast('请等待详情加载完成后编辑'); return }
+        setEditingVisit(selectedVisit); setSourceVisit(null); setCreateKind('visit'); setCreateOpen(true); setSelectedVisit(null)
+      }} onCreateTask={() => { openCreate('task'); setSourceVisit(selectedVisit); setSelectedVisit(null) }} onNotify={setToast} />
+      {toast ? <div className="toast" role="status">{toast.startsWith('操作失败') ? <X size={18} /> : <CheckCircle2 size={18} />}{toast}</div> : null}
+    </div></WriteAccess.Provider></OpenSourceVisit.Provider></BusinessSession.Provider></BusinessClock.Provider>
   )
 }
 
@@ -530,16 +672,24 @@ function ServiceError({ message, onRetry, onLogout }: { message: string; onRetry
   return <main className="system-state-screen error-state"><span className="system-state-logo"><RefreshCw size={28} /></span><strong>业务服务暂时不可用</strong><p>{message}</p><div><button className="button button-primary" type="button" onClick={onRetry}>重新连接</button><button className="button button-secondary" type="button" onClick={onLogout}>退出登录</button></div></main>
 }
 
-function NotificationPopover({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="notification-popover">
-      <header><strong>通知</strong><button type="button" onClick={onClose}>全部已读</button></header>
-      <div>
-        <button type="button"><span className="notice-icon notice-danger"><ListTodo size={16} /></span><p><strong>待办提醒</strong><small>请优先处理已逾期事项</small><time>刚刚</time></p></button>
-        <button type="button"><span className="notice-icon"><MapPinned size={16} /></span><p><strong>主数据关联提示</strong><small>新建事项需要关联组织或人脉</small><time>系统</time></p></button>
-        <button type="button"><span className="notice-icon notice-success"><CheckCircle2 size={16} /></span><p><strong>双库同步正常</strong><small>组织库与人脉库保持独立关联</small><time>系统</time></p></button>
-      </div>
-      <footer><button type="button">查看全部通知</button></footer>
-    </div>
-  )
+function NotificationPopover({ notices, onClose, onOpen }: { notices: ReturnType<typeof useNotifications>; onClose: () => void; onOpen: (id: string) => Promise<void> }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement
+    ref.current?.querySelector<HTMLElement>('button')?.focus()
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close.current(); previous?.focus() } }
+    document.addEventListener('keydown', key)
+    return () => document.removeEventListener('keydown', key)
+  }, [])
+  return <div ref={ref} className="notification-popover" role="region" aria-label="通知列表">
+    <header><strong>通知 · {notices.unread} 条未读</strong><button disabled={notices.busy || !notices.unread} type="button" onClick={() => void notices.markRead(notices.items, true)}>全部已读</button></header>
+    <p className="notice-scope">部门逾期待办提醒；完成或取消后自动移出。</p>
+    {notices.error ? <p role="alert">{notices.error}<button type="button" onClick={() => void notices.refresh()}>重试</button></p> : null}
+    <div className="notification-items">{notices.items.map(item => <button key={item.id} type="button" disabled={notices.busy} className={item.read ? 'notice-read' : 'notice-unread'} onClick={async () => { if (await notices.markRead([item])) await onOpen(item.id) }}>
+      <span className="notice-icon notice-danger"><ListTodo size={16} /></span><p><strong>{item.title}</strong><small>{item.read ? '已读' : '未读'} · 逾期待办</small><time>{new Date(item.dueAt).toLocaleString('zh-CN')}</time></p>
+    </button>)}</div>
+    {!notices.items.length && !notices.error ? <p className="notice-scope">暂无逾期待办通知</p> : null}
+  </div>
 }

@@ -1,6 +1,8 @@
 import type { Contact, Customer, Task, Visit } from './types'
 
 export interface ApiOrganization {
+  parentOrganizationId?: string | null
+  parentOrganizationName?: string | null
   id: string
   name: string
   shortName?: string
@@ -47,6 +49,10 @@ export interface ApiContact {
 }
 
 export interface ApiBusinessItem {
+  revision?: string
+  events?: Visit['events']
+  completedAt?: string
+  createdAt?: string
   id: string
   itemType: 'visit' | 'task'
   title: string
@@ -81,7 +87,7 @@ const visitStatus: Record<string, Visit['status']> = {
   in_progress: '进行中',
   completed: '已完成',
   postponed: '已延期',
-  cancelled: '已延期',
+  cancelled: '已取消',
 }
 
 const taskStatus: Record<string, Task['status']> = {
@@ -89,7 +95,7 @@ const taskStatus: Record<string, Task['status']> = {
   in_progress: '进行中',
   completed: '已完成',
   overdue: '已逾期',
-  cancelled: '已完成',
+  cancelled: '已取消',
 }
 
 const taskPriority: Record<string, Task['priority']> = { high: '高', medium: '中', low: '低' }
@@ -108,12 +114,16 @@ export function toCustomer(org: ApiOrganization, items: ApiBusinessItem[]): Cust
   const nextTask = openTasks.sort((a, b) => String(a.dueAt).localeCompare(String(b.dueAt)))[0]
   return {
     id: org.id,
+    parentOrganizationId: org.parentOrganizationId,
+    parentOrganizationName: org.parentOrganizationName,
+    organizationType: org.organizationType,
     name: org.name,
+    address: org.address,
     shortName: org.shortName || org.name.slice(0, 1),
     industry: org.industry || '未分类',
     contact: org.primaryContactName || (org.contactCount ? `${org.contactCount} 位联系人` : '暂无联系人'),
     phone: org.primaryContactMobile || '—',
-    region: org.region || org.address || '待补充',
+    region: org.region?.trim() || '未填写地区',
     owner: org.ownerName || '未分配',
     lastVisit: lastVisit?.startsAt ? formatDateTime(lastVisit.startsAt) : '暂无拜访',
     nextAction: nextTask?.title || '暂无待办',
@@ -149,12 +159,17 @@ export function toContact(contact: ApiContact): Contact {
 }
 
 export function toVisit(item: ApiBusinessItem): Visit {
-  const start = item.startsAt ? new Date(item.startsAt) : new Date()
+  const start = item.startsAt ? new Date(item.startsAt) : null
   const end = item.endsAt ? new Date(item.endsAt) : null
   const organization = item.organizations[0]
   const contact = item.contacts[0]
   const customerName = organization?.name || '仅关联人脉'
   return {
+    revision: item.revision,
+    events: item.events,
+    ownerUserId: item.ownerUserId,
+    completedAt: item.completedAt,
+    createdAt: item.createdAt,
     id: item.id,
     organizationIds: item.organizations.map((entry) => entry.id),
     contactIds: item.contacts.map((entry) => entry.id),
@@ -164,11 +179,11 @@ export function toVisit(item: ApiBusinessItem): Visit {
     phone: contact?.mobile || '—',
     owner: item.ownerName,
     participants: item.participantNames || [],
-    date: toLocalDate(start),
-    time: toLocalTime(start),
+    date: start ? toLocalDate(start) : '',
+    time: start ? toLocalTime(start) : '',
     endTime: end ? toLocalTime(end) : '',
     location: item.location || '待补充',
-    region: item.location || '待补充',
+    region: '未填写地区',
     matter: item.content || item.title,
     result: item.result || '待拜访后填写。',
     status: visitStatus[item.status] || '待开始',
@@ -177,17 +192,23 @@ export function toVisit(item: ApiBusinessItem): Visit {
 }
 
 export function toTask(item: ApiBusinessItem): Task {
-  const due = item.dueAt ? new Date(item.dueAt) : new Date()
+  const due = item.dueAt ? new Date(item.dueAt) : null
   return {
+    sourceItemId: item.sourceItemId,
+    ownerUserId: item.ownerUserId,
+    completedAt: item.completedAt,
+    createdAt: item.createdAt,
+    dueAt: item.dueAt,
     id: item.id,
     organizationIds: item.organizations.map((entry) => entry.id),
     contactIds: item.contacts.map((entry) => entry.id),
     isInternal: item.isInternal,
     title: item.title,
+    content: item.content || '',
     customer: item.organizations[0]?.name || (item.contacts[0]?.fullName ? `联系人：${item.contacts[0].fullName}` : '部门内部'),
     assignee: item.ownerName,
-    due: toLocalDate(due),
-    dueLabel: formatDateTime(due.toISOString()),
+    due: due ? toLocalDate(due) : '',
+    dueLabel: due ? formatDateTime(due.toISOString()) : '未填写截止时间',
     priority: taskPriority[item.priority || 'medium'] || '中',
     status: taskStatus[item.status] || '待处理',
     source: item.sourceItemId ? '关联事项' : item.isInternal ? '部门内部' : '独立待办',

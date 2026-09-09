@@ -8,3 +8,8 @@ server/.test-dist/
 .env
 .env.*.local
 deployment/*.zip
+public/downloads/*.apk
+deployment/*verification.apk
+.tmp-qr/
+.preparation/
+.tmp-doc-review/

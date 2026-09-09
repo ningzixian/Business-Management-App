@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { Request } from 'express'
 import { AuditService } from '../audit/audit.service'
 import type { AuthenticatedUser } from '../common/authenticated-user'
+import { contactVisibilitySql } from '../common/contact-visibility'
 import { paginationMeta } from '../common/pagination.dto'
 import { DatabaseService, type DatabaseClient } from '../database/database.service'
 import type {
@@ -19,7 +20,7 @@ export class OrganizationsService {
   ) {}
 
   async list(user: AuthenticatedUser, query: OrganizationListQueryDto) {
-    const values: unknown[] = [user.departmentId]
+    const values: unknown[] = [user.departmentId, user.userId, ['admin', 'manager'].includes(user.role)]
     const filters = ['o.department_id = $1', 'o.deleted_at IS NULL']
 
     if (query.q?.trim()) {
@@ -41,11 +42,12 @@ export class OrganizationsService {
     const result = await this.database.query<OrganizationListRow>(
       `SELECT o.id, o.name, o.short_name AS "shortName", o.organization_type AS "organizationType",
               o.industry, o.region, o.address, o.status, o.notes, o.created_at AS "createdAt",
-              owner.display_name AS "ownerName", parent.name AS "parentOrganizationName",
+              owner.display_name AS "ownerName", o.parent_organization_id AS "parentOrganizationId", parent.name AS "parentOrganizationName",
               primary_contact.id AS "primaryContactId", primary_contact.full_name AS "primaryContactName",
               primary_contact.mobile AS "primaryContactMobile",
-              (SELECT COUNT(*)::int FROM contact_affiliations ca
-               WHERE ca.organization_id = o.id AND ca.status = 'current' AND ca.deleted_at IS NULL) AS "contactCount",
+              (SELECT COUNT(*)::int FROM contact_affiliations ca JOIN contacts c ON c.id = ca.contact_id
+               WHERE ca.organization_id = o.id AND ca.status = 'current' AND ca.deleted_at IS NULL
+                 AND ${contactVisibilitySql('c', 1, 2, 3)}) AS "contactCount",
               (SELECT COUNT(*)::int FROM business_item_organizations bio
                JOIN business_items bi ON bi.id = bio.business_item_id
                WHERE bio.organization_id = o.id AND bi.deleted_at IS NULL) AS "itemCount",
@@ -58,6 +60,7 @@ export class OrganizationsService {
          FROM contact_affiliations ca
          JOIN contacts c ON c.id = ca.contact_id AND c.deleted_at IS NULL
          WHERE ca.organization_id = o.id AND ca.status = 'current' AND ca.deleted_at IS NULL
+           AND ${contactVisibilitySql('c', 1, 2, 3)}
          ORDER BY ca.is_primary DESC, ca.updated_at DESC
          LIMIT 1
        ) primary_contact ON TRUE
@@ -100,8 +103,9 @@ export class OrganizationsService {
          JOIN contacts c ON c.id = ca.contact_id AND c.deleted_at IS NULL
          LEFT JOIN organization_units ou ON ou.id = ca.organization_unit_id
          WHERE ca.organization_id = $1 AND ca.deleted_at IS NULL
+           AND ${contactVisibilitySql('c', 2, 3, 4)}
          ORDER BY ca.status = 'current' DESC, ca.is_primary DESC, c.full_name`,
-        [id],
+        [id, user.departmentId, user.userId, ['admin', 'manager'].includes(user.role)],
       ),
       this.database.query(
         `SELECT bi.id, bi.item_type AS "itemType", bi.title, bi.status,
@@ -118,6 +122,7 @@ export class OrganizationsService {
 
   async create(user: AuthenticatedUser, dto: CreateOrganizationDto, request?: Request) {
     const id = await this.database.transaction(async (client) => {
+      await this.lockHierarchy(client, user.departmentId)
       if (dto.parentOrganizationId) await this.assertOrganization(client, user.departmentId, dto.parentOrganizationId)
       if (dto.ownerUserId) await this.assertUser(client, user.departmentId, dto.ownerUserId)
 
@@ -144,9 +149,20 @@ export class OrganizationsService {
   async update(user: AuthenticatedUser, id: string, dto: UpdateOrganizationDto, request?: Request) {
     await this.get(user, id)
     await this.database.transaction(async (client) => {
+      await this.lockHierarchy(client, user.departmentId)
+      await this.assertOrganization(client, user.departmentId, id)
       if (dto.parentOrganizationId) {
         if (dto.parentOrganizationId === id) throw new BadRequestException('组织不能将自己设为上级')
         await this.assertOrganization(client, user.departmentId, dto.parentOrganizationId)
+        const cycle = await client.query(
+          `WITH RECURSIVE ancestors AS (
+             SELECT id, parent_organization_id FROM organizations WHERE id = $1
+             UNION
+             SELECT o.id, o.parent_organization_id FROM organizations o
+             JOIN ancestors a ON o.id = a.parent_organization_id
+           ) SELECT id FROM ancestors WHERE id = $2`, [dto.parentOrganizationId, id],
+        )
+        if (cycle.rowCount) throw new BadRequestException('不能将下级组织设为上级，否则会形成循环层级')
       }
       if (dto.ownerUserId) await this.assertUser(client, user.departmentId, dto.ownerUserId)
 
@@ -175,6 +191,9 @@ export class OrganizationsService {
   async remove(user: AuthenticatedUser, id: string, request?: Request) {
     await this.get(user, id)
     await this.database.transaction(async (client) => {
+      await this.lockHierarchy(client, user.departmentId)
+      const children = await client.query('SELECT id FROM organizations WHERE parent_organization_id = $1 AND deleted_at IS NULL LIMIT 1', [id])
+      if (children.rowCount) throw new BadRequestException('请先调整或删除下级组织，再删除当前组织')
       await client.query(
         `UPDATE organizations SET deleted_at = NOW(), status = 'inactive', updated_by = $1
          WHERE id = $2 AND department_id = $3 AND deleted_at IS NULL`,
@@ -202,6 +221,11 @@ export class OrganizationsService {
       await this.audit.log({ actor: user, action: 'organization_unit.create', entityType: 'organization_unit', entityId: id, changes: { organizationId, name: dto.name }, request }, client)
       return { id, ...dto, organizationId }
     })
+  }
+
+  private async lockHierarchy(client: DatabaseClient, departmentId: string) {
+    // Serialize hierarchy writes in one department, including parent deletion.
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [departmentId])
   }
 
   private async assertOrganization(client: DatabaseClient, departmentId: string, id: string) {

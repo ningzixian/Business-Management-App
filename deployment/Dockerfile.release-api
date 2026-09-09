@@ -1,0 +1,3 @@
+FROM business-management-test-api:baseline
+COPY server/dist /app/dist
+COPY server/migrations /app/migrations

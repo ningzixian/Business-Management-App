@@ -1,7 +1,7 @@
+import { WriteButton } from './write-access'
 import { useState, type ReactNode } from 'react'
 import {
   AlertTriangle,
-  BarChart3,
   Building2,
   CalendarCheck2,
   CalendarDays,
@@ -16,18 +16,19 @@ import {
   ListTodo,
   MapPin,
   MoreHorizontal,
-  Navigation,
-  Phone,
   Plus,
   Search,
   UserRound,
   UsersRound,
 } from 'lucide-react'
-import { departmentRanking } from './data'
+import { useBusinessNow, useBusinessUser } from './business-clock'
+import { inPeriod, isOpen, localDay, sortTasks, weekRange } from './business-metrics'
+import { LiveReports } from './live-reports'
+import { TaskPreview, SourceVisitButton } from './task-preview'
+import { PhoneAction, MapAction } from './mobile-actions'
 import type { Customer, EntityId, PageKey, Task, Visit } from './types'
 import { InitialAvatar, StatusTag } from './ui'
 
-const TODAY = '2026-09-04'
 
 const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const shortDayNames = ['日', '一', '二', '三', '四', '五', '六']
@@ -45,12 +46,14 @@ function toIsoDate(value: Date) {
 
 function longDateLabel(value: string) {
   const date = parseDate(value)
+  if (!Number.isFinite(date.getTime())) return '未填写日期'
   return `${date.getMonth() + 1}月${date.getDate()}日 · ${dayNames[date.getDay()]}`
 }
 
-function groupDateLabel(value: string) {
-  if (value === TODAY) return '今天 · 9月4日'
-  if (value === '2026-09-05') return '明天 · 9月5日'
+function groupDateLabel(value: string, today: string) {
+  if (value === today) return '今天 · ' + longDateLabel(value)
+  const tomorrow = parseDate(today); tomorrow.setDate(tomorrow.getDate() + 1)
+  if (value === toIsoDate(tomorrow)) return '明天 · ' + longDateLabel(value)
   const date = parseDate(value)
   return `${date.getMonth() + 1}月${date.getDate()}日 · ${dayNames[date.getDay()]}`
 }
@@ -145,18 +148,20 @@ export function MobileDashboardPage({
   onSelectVisit: (visit: Visit) => void
   onToggleTask: (taskId: EntityId) => void
 }) {
+  const now = useBusinessNow()
+  const TODAY = localDay(now)
+  const user = useBusinessUser()
   const todayVisits = visits.filter((visit) => visit.date === TODAY).sort((a, b) => a.time.localeCompare(b.time))
-  const openTasks = tasks.filter((task) => task.status !== '已完成')
+  const openTasks = sortTasks(tasks.filter(isOpen))
   const overdueTasks = openTasks.filter((task) => task.status === '已逾期')
   const nextVisit = todayVisits.find((visit) => visit.status === '进行中')
     ?? todayVisits.find((visit) => visit.status === '待开始')
-    ?? todayVisits[0]
 
   return (
     <div className="mobile-page mobile-dashboard-page">
       <MobilePageTitle
-        eyebrow="9月4日 · 星期五"
-        title="上午好，张伟"
+        eyebrow={longDateLabel(TODAY)}
+        title={`${now.getHours() < 12 ? '上午好' : now.getHours() < 18 ? '下午好' : '晚上好'}，${user?.displayName || '同事'}`}
         description="先处理眼前的拜访和到期事项。"
         action={<button className="mobile-title-action" type="button" onClick={() => onNavigate('calendar')}><CalendarDays size={18} /><span>日程</span></button>}
       />
@@ -178,8 +183,8 @@ export function MobileDashboardPage({
             <ChevronRight size={19} />
           </button>
           <div className="mobile-context-actions">
-            <button type="button"><Phone size={16} /> 联系客户</button>
-            <button type="button"><Navigation size={16} /> 导航到访</button>
+            <PhoneAction phone={nextVisit.phone} label="联系客户" />
+            <MapAction address={nextVisit.location} label="导航到访" />
             <button type="button" onClick={() => onSelectVisit(nextVisit)}><FileText size={16} /> 详情</button>
           </div>
         </section>
@@ -192,9 +197,9 @@ export function MobileDashboardPage({
       </section>
 
       <section className="mobile-quick-create" aria-label="快速创建">
-        <button type="button" onClick={() => onCreate('visit')}><span><Plus size={18} /></span>记拜访</button>
-        <button type="button" onClick={() => onCreate('task')}><span><CheckCircle2 size={18} /></span>加待办</button>
-        <button type="button" onClick={() => onCreate('organization')}><span><UsersRound size={18} /></span>录组织</button>
+        <WriteButton type="button" onClick={() => onCreate('visit')}><span><Plus size={18} /></span>记拜访</WriteButton>
+        <WriteButton type="button" onClick={() => onCreate('task')}><span><CheckCircle2 size={18} /></span>加待办</WriteButton>
+        <WriteButton type="button" onClick={() => onCreate('organization')}><span><UsersRound size={18} /></span>录组织</WriteButton>
       </section>
 
       <section className="mobile-section">
@@ -227,7 +232,7 @@ export function MobileDashboardPage({
         <div className="mobile-home-task-list">
           {openTasks.slice(0, 3).map((task) => (
             <div className={`mobile-home-task ${task.status === '已逾期' ? 'is-overdue' : ''}`} key={task.id}>
-              <button className="mobile-task-check" type="button" onClick={() => onToggleTask(task.id)} aria-label={`完成 ${task.title}`}><Circle size={19} /></button>
+              <WriteButton className="mobile-task-check" type="button" onClick={() => onToggleTask(task.id)} aria-label={`完成 ${task.title}`}><Circle size={19} /></WriteButton>
               <span><strong>{task.title}</strong><small>{task.customer}</small></span>
               <time>{task.dueLabel}</time>
             </div>
@@ -242,8 +247,10 @@ export function MobileCustomersPage({
   customers,
   onCreate,
   onCreateVisit,
+  onUpdateHierarchy,
 }: {
   customers: Customer[]
+  onUpdateHierarchy?: import('./organization-tree').HierarchyUpdate
   onCreate: () => void
   onCreateVisit: () => void
 }) {
@@ -261,20 +268,21 @@ export function MobileCustomersPage({
     <div className="mobile-page">
       <MobilePageTitle
         eyebrow={`独立主数据 · ${customers.length} 个组织`}
-        title="甲方组织库"
+        title="组织"
         description="维护组织资料，并查看其主要联系人和关联事项。"
-        action={<button className="mobile-round-add" type="button" onClick={onCreate} aria-label="添加组织"><Plus size={20} /></button>}
+        action={<WriteButton className="mobile-round-add" type="button" onClick={onCreate} aria-label="添加组织"><Plus size={20} /></WriteButton>}
       />
       <label className="mobile-search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} type="search" placeholder="搜索组织、联系人或地区" /></label>
       <div className="mobile-filter-chips" role="tablist" aria-label="客户筛选">
         {(['全部', '重点', '有待办'] as const).map((item) => <button className={filter === item ? 'is-active' : ''} type="button" key={item} onClick={() => setFilter(item)}>{item}</button>)}
       </div>
+      <OrganizationTree organizations={customers} onUpdate={onUpdateHierarchy} />
       <section className="mobile-customer-list">
         {filteredCustomers.map((customer) => (
           <article className="mobile-customer-card" key={customer.id}>
             <header>
               <InitialAvatar text={customer.shortName} color={customer.color} />
-              <span><strong>{customer.name}</strong><small>{customer.industry} · {customer.region}</small></span>
+              <span><strong>{customer.name}</strong><small>{organizationPath(customer, customers)}</small><small>{customer.industry} · {customer.region}</small></span>
               <StatusTag label={customer.status} />
             </header>
             <div className="mobile-contact-strip">
@@ -283,9 +291,9 @@ export function MobileCustomersPage({
             </div>
             <div className="mobile-next-action"><span>下一步</span><strong>{customer.nextAction}</strong>{customer.openTasks ? <b>{customer.openTasks} 项待办</b> : <b className="is-clear">暂无待办</b>}</div>
             <footer>
-              <button type="button"><Phone size={16} />打电话</button>
-              <button type="button"><Navigation size={16} />导航</button>
-              <button className="is-primary" type="button" onClick={onCreateVisit}><CalendarCheck2 size={16} />约拜访</button>
+              <PhoneAction phone={customer.phone} label="打电话" />
+              <MapAction address={customer.address} />
+              <WriteButton className="is-primary" type="button" onClick={onCreateVisit}><CalendarCheck2 size={16} />约拜访</WriteButton>
             </footer>
           </article>
         ))}
@@ -306,6 +314,7 @@ export function MobileVisitsPage({
   onOpenCalendar: () => void
   onSelectVisit: (visit: Visit) => void
 }) {
+  const TODAY = localDay(useBusinessNow())
   const [filter, setFilter] = useState<'全部' | '今天' | '待拜访' | '已完成'>('全部')
   const filteredVisits = visits.filter((visit) => {
     if (filter === '今天') return visit.date === TODAY
@@ -332,7 +341,7 @@ export function MobileVisitsPage({
       <section className="mobile-visit-groups">
         {Object.entries(groups).map(([date, dateVisits]) => (
           <div className="mobile-visit-group" key={date}>
-            <header><strong>{groupDateLabel(date)}</strong><span>{dateVisits.length} 场</span></header>
+            <header><strong>{groupDateLabel(date, TODAY)}</strong><span>{dateVisits.length} 场</span></header>
             <div>
               {dateVisits.sort((a, b) => a.time.localeCompare(b.time)).map((visit) => (
                 <article className="mobile-visit-card" key={visit.id}>
@@ -347,20 +356,20 @@ export function MobileVisitsPage({
                     </span>
                     <ChevronRight size={18} />
                   </button>
-                  <footer><button type="button"><Phone size={15} />联系</button><button type="button"><Navigation size={15} />导航</button><button type="button" onClick={() => onSelectVisit(visit)}><FileText size={15} />记录</button></footer>
+                  <footer><PhoneAction phone={visit.phone} /><MapAction address={visit.location} /><button type="button" onClick={() => onSelectVisit(visit)}><FileText size={15} />记录</button></footer>
                 </article>
               ))}
             </div>
           </div>
         ))}
       </section>
-      <button className="mobile-wide-create" type="button" onClick={onCreate}><Plus size={18} />新建拜访</button>
+      <WriteButton className="mobile-wide-create" type="button" onClick={onCreate}><Plus size={18} />新建拜访</WriteButton>
     </div>
   )
 }
 
 export function MobileTasksPage({
-  tasks,
+  tasks: allTasks,
   onToggleTask,
   onCreate,
 }: {
@@ -368,29 +377,37 @@ export function MobileTasksPage({
   onToggleTask: (id: EntityId) => void
   onCreate: () => void
 }) {
+  const now = useBusinessNow()
+  const TODAY = localDay(now)
+  const user = useBusinessUser()
+  const [scope, setScope] = useState<'mine' | 'team'>('mine')
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+  const tasks = sortTasks(allTasks.filter(task => scope === 'team' || task.ownerUserId === user?.userId))
   const [filter, setFilter] = useState<'待完成' | '全部' | '已完成'>('待完成')
   const overdue = tasks.filter((task) => task.status === '已逾期')
-  const today = tasks.filter((task) => task.status !== '已完成' && task.status !== '已逾期' && task.due === TODAY)
-  const later = tasks.filter((task) => task.status !== '已完成' && task.status !== '已逾期' && task.due !== TODAY)
+  const today = tasks.filter((task) => isOpen(task) && task.status !== '已逾期' && task.due === TODAY)
+  const later = tasks.filter((task) => isOpen(task) && task.status !== '已逾期' && task.due !== TODAY)
   const done = tasks.filter((task) => task.status === '已完成')
   const groups = filter === '已完成'
     ? [{ title: '已完成', tone: 'done', tasks: done }]
     : filter === '全部'
-      ? [{ title: '已经逾期', tone: 'overdue', tasks: overdue }, { title: '今天', tone: 'today', tasks: today }, { title: '接下来', tone: 'later', tasks: later }, { title: '已完成', tone: 'done', tasks: done }]
+      ? [{ title: '已经逾期', tone: 'overdue', tasks: overdue }, { title: '今天', tone: 'today', tasks: today }, { title: '接下来', tone: 'later', tasks: later }, { title: '已完成', tone: 'done', tasks: done }, { title: '已取消', tone: 'done', tasks: tasks.filter(task => task.status === '已取消') }]
       : [{ title: '已经逾期', tone: 'overdue', tasks: overdue }, { title: '今天', tone: 'today', tasks: today }, { title: '接下来', tone: 'later', tasks: later }]
 
   return (
     <div className="mobile-page">
       <MobilePageTitle
         eyebrow="明确负责人和截止时间"
-        title="我的待办"
-        description={`${tasks.filter((task) => task.status !== '已完成').length} 项待完成，${overdue.length} 项已逾期。`}
-        action={<button className="mobile-round-add" type="button" onClick={onCreate} aria-label="新建待办"><Plus size={20} /></button>}
+        title={scope === 'mine' ? '我的待办' : '团队待办'}
+        description={`${tasks.filter(isOpen).length} 项待完成，${overdue.length} 项已逾期。`}
+        action={<WriteButton className="mobile-round-add" type="button" onClick={onCreate} aria-label="新建待办"><Plus size={20} /></WriteButton>}
       />
+      <div className="mobile-segment-control" aria-label="待办范围"><button type="button" className={scope === 'mine' ? 'is-active' : ''} onClick={() => setScope('mine')}>我的待办</button><button type="button" className={scope === 'team' ? 'is-active' : ''} onClick={() => setScope('team')}>团队待办</button></div>
+      <p className="report-scope">团队仅包含当前部门授权数据；本周新增 {tasks.filter(t => inPeriod(t.createdAt, weekRange(now))).length} 项</p>
       <section className="mobile-task-overview">
-        <article><span><ListTodo size={18} /></span><div><strong>{tasks.length - done.length}</strong><small>待完成</small></div></article>
+        <article><span><ListTodo size={18} /></span><div><strong>{tasks.filter(isOpen).length}</strong><small>待完成</small></div></article>
         <article className="is-danger"><span><AlertTriangle size={18} /></span><div><strong>{overdue.length}</strong><small>已经逾期</small></div></article>
-        <article className="is-success"><span><CheckCircle2 size={18} /></span><div><strong>{done.length}</strong><small>本周完成</small></div></article>
+        <article className="is-success"><span><CheckCircle2 size={18} /></span><div><strong>{done.filter(t => inPeriod(t.completedAt, weekRange(now))).length}</strong><small>本周完成</small></div></article>
       </section>
       <div className="mobile-segment-control mobile-task-segments" role="tablist" aria-label="待办筛选">
         {(['待完成', '全部', '已完成'] as const).map((item) => <button className={filter === item ? 'is-active' : ''} type="button" key={item} onClick={() => setFilter(item)}>{item}</button>)}
@@ -402,15 +419,17 @@ export function MobileTasksPage({
             <div>
               {group.tasks.map((task) => (
                 <article className={`mobile-task-row ${task.status === '已完成' ? 'is-completed' : ''}`} key={task.id}>
-                  <button className={`mobile-task-check ${task.status === '已完成' ? 'is-checked' : ''}`} type="button" onClick={() => onToggleTask(task.id)} aria-label={`${task.status === '已完成' ? '恢复' : '完成'} ${task.title}`}>{task.status === '已完成' ? <Check size={17} /> : <Circle size={20} />}</button>
-                  <span className="mobile-task-copy"><strong>{task.title}</strong><small><Building2 size={13} />{task.customer}</small><em><Clock3 size={13} />{task.dueLabel}<b className={`priority-dot priority-${task.priority}`}>{task.priority}</b></em></span>
-                  <button className="mobile-more-button" type="button" aria-label="更多操作"><MoreHorizontal size={19} /></button>
+                  <WriteButton className={`mobile-task-check ${task.status === '已完成' ? 'is-checked' : ''}`} type="button" onClick={() => onToggleTask(task.id)} aria-label={`${task.status === '已完成' ? '恢复' : '完成'} ${task.title}`}>{task.status === '已完成' ? <Check size={17} /> : <Circle size={20} />}</WriteButton>
+                  <span className="mobile-task-copy"><strong>{task.title}</strong>{task.content ? <details className="task-description"><summary>补充说明</summary><p>{task.content}</p></details> : null}<small><Building2 size={13} />{task.customer}</small><em><Clock3 size={13} />{task.dueLabel}<b className={`priority-dot priority-${task.priority}`}>{task.priority}</b></em></span>
+                  <SourceVisitButton task={task} />
+                  <button className="mobile-more-button" type="button" aria-label={`查看 ${task.title}`} onClick={() => setSelectedTask(task)}><MoreHorizontal size={19} /></button>
                 </article>
               ))}
             </div>
           </div>
         ))}
       </section>
+      <TaskPreview task={selectedTask} onClose={() => setSelectedTask(null)} />
     </div>
   )
 }
@@ -426,16 +445,20 @@ export function MobileCalendarPage({
   onCreate: () => void
   onSelectVisit: (visit: Visit) => void
 }) {
-  const [selectedDate, setSelectedDate] = useState(TODAY)
-  const [monthDate, setMonthDate] = useState(() => parseDate(TODAY))
+  const TODAY = localDay(useBusinessNow())
+  const [selected, setSelectedDate] = useState<string | null>(null)
+  const selectedDate = selected || TODAY
+  const [month, setMonthDate] = useState<Date | null>(null)
+  const monthDate = month || parseDate(selectedDate)
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [monthOpen, setMonthOpen] = useState(false)
   const weekDays = getWeekDays(selectedDate)
   const monthDays = getMonthDays(monthDate)
   const selectedVisits = visits.filter((visit) => visit.date === selectedDate).sort((a, b) => a.time.localeCompare(b.time))
-  const selectedTasks = tasks.filter((task) => task.due === selectedDate && task.status !== '已完成')
+  const selectedTasks = tasks.filter((task) => task.due === selectedDate)
 
   function scheduleCount(date: string) {
-    return visits.filter((visit) => visit.date === date).length + tasks.filter((task) => task.due === date && task.status !== '已完成').length
+    return visits.filter((visit) => visit.date === date).length + tasks.filter((task) => task.due === date).length
   }
 
   function changeMonth(delta: number) {
@@ -445,8 +468,8 @@ export function MobileCalendarPage({
   }
 
   function selectToday() {
-    setSelectedDate(TODAY)
-    setMonthDate(parseDate(TODAY))
+    setSelectedDate(null)
+    setMonthDate(null)
     setMonthOpen(false)
   }
 
@@ -456,7 +479,7 @@ export function MobileCalendarPage({
         eyebrow="拜访与待办统一日程"
         title="日程"
         description="点选日期，只看当天需要处理的事情。"
-        action={<button className="mobile-round-add" type="button" onClick={onCreate} aria-label="新建日程"><Plus size={20} /></button>}
+        action={<WriteButton className="mobile-round-add" type="button" onClick={onCreate} aria-label="新建日程"><Plus size={20} /></WriteButton>}
       />
       <section className="mobile-calendar-card">
         <header className="mobile-calendar-toolbar">
@@ -509,48 +532,25 @@ export function MobileCalendarPage({
           </button>
         ))}
         {selectedTasks.map((task) => (
-          <article className="mobile-calendar-event is-task" key={task.id}>
+          <button type="button" className="mobile-calendar-event is-task" key={task.id} onClick={() => setSelectedTask(task)}>
             <time><strong>{task.dueLabel.includes(' ') ? task.dueLabel.split(' ').at(-1) : '全天'}</strong><small>截止</small></time>
             <span className={`mobile-event-marker ${task.status === '已逾期' ? 'event-已延期' : 'event-待开始'}`}><i /></span>
             <span><em>待办事项</em><strong>{task.title}</strong><small><Building2 size={13} />{task.customer}</small></span>
-            <b className={`mobile-priority-badge priority-${task.priority}`}>{task.priority}</b>
-          </article>
+            <StatusTag label={task.status} />
+          </button>
         ))}
-        {selectedVisits.length === 0 && selectedTasks.length === 0 ? <MobileEmpty icon={<CalendarDays />} title="这一天暂无安排" hint="可以新建拜访或待办，提前规划时间。" action={<button type="button" onClick={onCreate}><Plus size={16} />新建日程</button>} /> : null}
+        <TaskPreview task={selectedTask} onClose={() => setSelectedTask(null)} />
+        {selectedVisits.length === 0 && selectedTasks.length === 0 ? <MobileEmpty icon={<CalendarDays />} title="这一天暂无安排" hint="可以新建拜访或待办，提前规划时间。" action={<WriteButton type="button" onClick={onCreate}><Plus size={16} />新建日程</WriteButton>} /> : null}
       </section>
     </div>
   )
 }
 
-export function MobileReportsPage() {
-  const maxVisits = Math.max(...departmentRanking.map((member) => member.visits))
-  return (
-    <div className="mobile-page">
-      <MobilePageTitle eyebrow="2026年9月" title="业务简报" description="手机端只呈现需要快速判断的核心指标。" />
-      <section className="mobile-report-hero">
-        <span>本月完成率</span><strong>87.5%</strong><small>较上月提升 6.2%</small><i><b style={{ width: '87.5%' }} /></i>
-      </section>
-      <section className="mobile-report-kpis">
-        <MobileMetric icon={<CalendarCheck2 />} label="累计拜访" value="76" tone="blue" />
-        <MobileMetric icon={<Building2 />} label="覆盖客户" value="42" tone="green" />
-        <MobileMetric icon={<CheckCircle2 />} label="完成待办" value="96" tone="cyan" />
-        <MobileMetric icon={<AlertTriangle />} label="逾期事项" value="7" tone="orange" />
-      </section>
-      <section className="mobile-section mobile-ranking-card">
-        <MobileSectionTitle title="成员执行情况" hint="按本月拜访数" />
-        <div className="mobile-ranking-list">
-          {departmentRanking.map((member, index) => (
-            <article key={member.name}>
-              <b>{index + 1}</b><InitialAvatar text={member.name} size="small" /><span><strong>{member.name}</strong><small>{member.tasks} 项待办 · 完成率 {member.rate}%</small><i><em style={{ width: `${(member.visits / maxVisits) * 100}%` }} /></i></span><strong>{member.visits}<small>次</small></strong>
-            </article>
-          ))}
-        </div>
-      </section>
-      <section className="mobile-insight-card"><span><BarChart3 size={19} /></span><div><strong>本周观察</strong><p>客户拜访完成度稳定，逾期待办主要集中在报价和演示准备，建议今天优先清理。</p></div><ChevronRight size={18} /></section>
-    </div>
-  )
+export function MobileReportsPage(props: { visits: Visit[]; tasks: Task[]; customers: Customer[]; onNotify: (message: string) => void }) {
+  return <LiveReports {...props} mobile />
 }
 
 function MobileEmpty({ icon, title, hint, action }: { icon: ReactNode; title: string; hint: string; action?: ReactNode }) {
   return <div className="mobile-empty-state"><span>{icon}</span><strong>{title}</strong><p>{hint}</p>{action}</div>
 }
+import { OrganizationTree, organizationPath } from './organization-tree'

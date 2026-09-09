@@ -62,6 +62,7 @@ export class CreateBusinessItemDto {
 }
 
 export class UpdateBusinessItemDto {
+  @IsOptional() @IsString() @MaxLength(30) expectedRevision?: string
   @IsOptional() @IsString() @MinLength(1) @MaxLength(300) title?: string
   @IsOptional() @IsString() @MaxLength(10000) content?: string
   @IsOptional() @IsString() @MaxLength(10000) result?: string

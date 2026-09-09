@@ -21,6 +21,11 @@ import { AttachmentsService } from './attachments.service'
 export class AttachmentsController {
   constructor(private readonly attachments: AttachmentsService) {}
 
+  @Get('business-items/:itemId/attachments')
+  list(@CurrentUser() user: AuthenticatedUser, @Param('itemId', ParseUUIDPipe) itemId: string) {
+    return this.attachments.list(user, itemId)
+  }
+
   @Post('business-items/:itemId/attachments')
   @Roles('admin', 'manager', 'member')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024, files: 1 } }))
@@ -41,6 +46,8 @@ export class AttachmentsController {
   ) {
     const { metadata, stream } = await this.attachments.download(user, id)
     response.setHeader('Content-Type', metadata.mimeType)
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+    response.setHeader('Cache-Control', 'private, no-store')
     response.setHeader('Content-Length', metadata.sizeBytes)
     response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(metadata.fileName)}`)
     stream.on('error', () => response.destroy())

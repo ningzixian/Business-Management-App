@@ -30,3 +30,8 @@ test('账号安全迁移支持旧令牌即时失效和密码变更时间', async
   assert.match(migration, /ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1/)
   assert.match(migration, /ADD COLUMN password_changed_at TIMESTAMPTZ/)
 })
+
+test('新建事项状态比较使用 varchar，避免 PostgreSQL 参数类型冲突', async () => {
+  const source = await readFile(join(process.cwd(), 'src', 'business-items', 'business-items.service.ts'), 'utf8')
+  assert.match(source, /CASE WHEN \$10::varchar = 'completed'/)
+})

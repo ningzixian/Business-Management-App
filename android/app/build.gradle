@@ -7,8 +7,11 @@ android {
         applicationId "com.company.departmentsteward"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode = (project.findProperty('qaVersionCode') ?: '7').toInteger()
+        versionName = project.hasProperty('qaVersionCode') ? '0.2.5-QA' : '0.2.5'
+        def serviceFile = file('src/main/assets/public/service-config.json')
+        def service = serviceFile.exists() ? new groovy.json.JsonSlurper().parse(serviceFile) : [:]
+        manifestPlaceholders = [businessCleartext: service.origin?.startsWith('http://') ? 'true' : 'false']
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -21,6 +24,15 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+}
+
+tasks.named('preBuild').configure {
+    doFirst {
+        def configFile = file('src/main/assets/public/service-config.json')
+        if (!configFile.exists()) throw new GradleException('Run npm run mobile:sync before building an APK')
+        def service = new groovy.json.JsonSlurper().parse(configFile)
+        if (!service.origin || service.apiBase != service.origin + '/api/v1') throw new GradleException('Mobile service configuration is missing or inconsistent')
     }
 }
 

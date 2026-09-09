@@ -1,0 +1,77 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');const path=require('node:path');
+const {chromium}=require(process.env.QA_PLAYWRIGHT_PATH||'playwright');
+const dir=path.resolve(__dirname,'../.preparation/phase3-browser');fs.mkdirSync(dir,{recursive:true});
+async function main(){
+ const browser=await chromium.launch({channel:'msedge',headless:true});
+ try{for(const width of [1440,390]){
+  const context=await browser.newContext({viewport:{width,height:940},timezoneId:'Asia/Shanghai'});
+  const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  // This regression intentionally discards saved/replaced drafts; Phase 5 separately tests rejecting dismissal.
+  page.on('dialog',dialog=>dialog.accept());
+  const nav=name=>page.locator(width===390?'.mobile-bottom-nav':'.sidebar-nav').getByRole('button',{name:new RegExp('^'+name)}).click();
+  await page.goto('http://127.0.0.1:18189/?phase3');await nav('拜访');
+  await page.getByText('第三阶段拜访',{exact:true}).first().click();
+  await page.locator('.record-timeline').getByText('创建拜访记录',{exact:true}).waitFor();
+  assert.doesNotMatch(await page.locator('.detail-drawer').innerText(),/定位签到|提交项目排期及正式报价|9月2日/);
+  await page.getByRole('button',{name:'编辑记录',exact:true}).click();
+  assert.equal(await page.locator('input[name="location"]').inputValue(),'旧地点');
+  await page.locator('input[name="location"]').fill('修改后地点');
+  if(width===390)await page.getByRole('button',{name:/下一步/}).click();
+  await page.locator('textarea[name="matter"]').fill('编辑拜访中文\n第二行');
+  await page.locator('select[name="status"]').selectOption('已完成');
+  await page.getByLabel('注入响应').selectOption('409');
+  await page.getByRole('button',{name:width===390?'保存拜访':'保存记录',exact:true}).click();
+  await page.getByText('注入测试错误 409',{exact:true}).waitFor();
+  assert.equal(await page.locator('textarea[name="matter"]').inputValue(),'编辑拜访中文\n第二行');
+  await page.getByLabel('注入响应').selectOption('success');
+  await page.getByRole('button',{name:width===390?'保存拜访':'保存记录',exact:true}).click();
+  await page.locator('.record-timeline').getByText('修改拜访记录',{exact:true}).waitFor();
+  await page.locator('.drawer-header').getByText('已完成',{exact:true}).waitFor();
+  await page.screenshot({path:path.join(dir,`timeline-${width}.png`),fullPage:true});
+  await page.getByRole('button',{name:'生成待办',exact:true}).last().click();
+  assert.match(await page.locator('input[name="title"]').inputValue(),/编辑拜访中文/);
+  assert.equal(await page.locator('.relation-choice-list button.is-selected').first().innerText(),'第三阶段组织');
+  await page.locator('input[name="title"]').fill('来源待办'+width);
+  await page.getByRole('button',{name:'创建待办',exact:true}).click();
+  await page.getByText('来源待办'+width,{exact:true}).waitFor();
+  await page.reload();await nav('待办');
+  await page.getByRole('button',{name:'查看来源拜访',exact:true}).click();
+  await page.locator('.detail-drawer').getByText('来源待办'+width,{exact:true}).waitFor();
+  await page.locator('.linked-task').click();
+  await page.getByRole('dialog').filter({hasText:'待办详情'}).waitFor();
+  await page.getByRole('button',{name:'关闭',exact:true}).last().click();
+  await page.getByRole('button',{name:'关闭',exact:true}).click();
+  await nav('拜访');await page.getByRole('button',{name:'新建拜访',exact:true}).click();
+  await page.locator('input[name="location"]').fill('草稿地点');
+  await page.locator('.relation-choice-list button').first().click();
+  if(width===390)await page.getByRole('button',{name:/下一步/}).click();
+  await page.locator('textarea[name="matter"]').fill('待恢复草稿\n第二行');
+  await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await page.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.goto('http://127.0.0.1:18189/?phase3&user=other');await nav('拜访');await page.getByRole('button',{name:'新建拜访',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'恢复草稿',exact:true}).count(),0);
+  await page.goto('http://127.0.0.1:18189/?phase3');await nav('拜访');await page.getByRole('button',{name:'新建拜访',exact:true}).click();
+  await page.getByRole('button',{name:'恢复草稿',exact:true}).click();
+  assert.equal(await page.locator('input[name="location"]').inputValue(),'草稿地点');
+  if(width===390)await page.getByRole('button',{name:/下一步/}).click();
+  assert.equal(await page.locator('textarea[name="matter"]').inputValue(),'待恢复草稿\n第二行');
+  await page.screenshot({path:path.join(dir,`draft-${width}.png`),fullPage:true});
+  await page.getByRole('button',{name:width===390?'保存拜访':'保存记录',exact:true}).click();
+  await page.locator('.record-modal').waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>localStorage.getItem('bam-visit-draft-v1:qa-local:qa-local')),null);
+  // Storage corruption can be explicitly discarded without crashing the form.
+  await page.evaluate(()=>localStorage.setItem('bam-visit-draft-v1:qa-local:qa-local','broken'));
+  await page.getByRole('button',{name:'新建拜访',exact:true}).click();
+  await page.getByText('草稿损坏或无法读取，可重试恢复或放弃草稿',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'放弃草稿',exact:true}).click();
+  assert.equal(await page.evaluate(()=>localStorage.getItem('bam-visit-draft-v1:qa-local:qa-local')),null);
+  await page.evaluate(()=>{Storage.prototype.setItem=function(){throw new Error('quota')}});
+  await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await page.getByText('草稿保存失败，请检查存储空间和权限；输入已保留',{exact:true}).waitFor();
+  assert.equal(errors.length,0,errors.join('\n'));
+  console.log(JSON.stringify({width,editAndConflictInput:true,realTimeline:true,sourceRoundtrip:true,draftRestore:true,accountIsolated:true,draftCleared:true,corruptDiscard:true,storageFailure:true,errors:0}));
+  await context.close();
+ }}finally{await browser.close()}
+}
+main().catch(e=>{console.error(e);process.exitCode=1});

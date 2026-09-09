@@ -10,7 +10,7 @@ import {
 } from 'class-validator'
 import { PaginationDto } from '../../common/pagination.dto'
 
-const organizationTypes = ['company', 'subsidiary', 'government', 'institution', 'other'] as const
+const organizationTypes = ['company', 'subsidiary', 'department', 'government', 'institution', 'other'] as const
 const organizationStatuses = ['key', 'following', 'normal', 'inactive'] as const
 
 export class OrganizationListQueryDto extends PaginationDto {
@@ -89,7 +89,7 @@ export class CreateOrganizationDto {
 export class UpdateOrganizationDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(240) name?: string
   @IsOptional() @IsString() @MaxLength(100) shortName?: string
-  @IsOptional() @IsUUID() parentOrganizationId?: string
+  @IsOptional() @IsUUID() parentOrganizationId?: string | null
   @IsOptional() @IsString() @MaxLength(32) unifiedSocialCreditCode?: string
   @IsOptional() @IsIn(organizationTypes) organizationType?: typeof organizationTypes[number]
   @IsOptional() @IsString() @MaxLength(120) industry?: string

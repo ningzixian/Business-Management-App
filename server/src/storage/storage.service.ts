@@ -75,7 +75,7 @@ export class StorageService implements OnModuleInit {
       Metadata: Object.fromEntries(Object.entries(metadata)
         .filter(([name]) => name !== 'Content-Type')
         .map(([name, value]) => [name.replace(/^X-Amz-Meta-/i, '').toLowerCase(), value])),
-    }))
+    }), { abortSignal: AbortSignal.timeout(120000) })
   }
 
   async getObject(key: string): Promise<Readable> {
@@ -85,7 +85,7 @@ export class StorageService implements OnModuleInit {
   }
 
   async removeObject(key: string) {
-    await this.requiredClient().send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
+    await this.requiredClient().send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }), { abortSignal: AbortSignal.timeout(10000) })
   }
 
   async ping() {

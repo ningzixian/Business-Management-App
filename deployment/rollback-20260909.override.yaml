@@ -1,0 +1,5 @@
+services:
+  web:
+    image: business-management-web:pre-20260909-143000
+  api:
+    image: business-management-api:pre-20260909-143000

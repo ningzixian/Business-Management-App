@@ -1,0 +1,121 @@
+name: business-management-test
+
+services:
+  web:
+    image: business-management-test-web:baseline
+    build:
+      context: ../..
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_DEMO_MODE: 'false'
+    ports:
+      - '127.0.0.1:18088:8080'
+    networks: [entry, qa]
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 100
+    restart: 'no'
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+  api:
+    image: business-management-test-api:baseline
+    build:
+      context: ../../server
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: business_management_test
+      DB_USER: business_test
+      DB_PASSWORD: ${QA_DB_PASSWORD:?Create isolated test credentials first}
+      DB_POOL_MAX: 4
+      AUTO_MIGRATE: 'true'
+      SEED_INITIAL_DATA: 'false'
+      SELF_REGISTRATION_ENABLED: 'false'
+      JWT_SECRET: ${QA_JWT_SECRET:?Create isolated test credentials first}
+      CORS_ORIGINS: http://127.0.0.1:18088,http://localhost:18088
+      MINIO_DISABLED: 'false'
+      MINIO_ENDPOINT: storage
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: 'false'
+      MINIO_ACCESS_KEY: qa-storage
+      MINIO_SECRET_KEY: ${QA_STORAGE_PASSWORD:?Create isolated test credentials first}
+      MINIO_BUCKET: qa-attachments
+      QA_TEST_PASSWORD: ${QA_TEST_PASSWORD:?Create isolated test credentials first}
+    volumes:
+      - ./seed.cjs:/app/test-seed.cjs:ro
+      - ./verify.cjs:/app/test-verify.cjs:ro
+      - ./verify-phase1.cjs:/app/test-verify-phase1.cjs:ro
+      - ./verify-phase2.cjs:/app/test-verify-phase2.cjs:ro
+      - ./verify-phase3.cjs:/app/test-verify-phase3.cjs:ro
+      - ./verify-phase4.cjs:/app/test-verify-phase4.cjs:ro
+      - ./verify-phase5.cjs:/app/test-verify-phase5.cjs:ro
+    networks: [qa]
+    depends_on:
+      db:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 160
+    restart: 'no'
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: business_management_test
+      POSTGRES_USER: business_test
+      POSTGRES_PASSWORD: ${QA_DB_PASSWORD:?Create isolated test credentials first}
+      TZ: Asia/Shanghai
+    volumes:
+      - qa-postgres:/var/lib/postgresql/data
+    command: [postgres, -c, shared_buffers=64MB, -c, max_connections=30]
+    networks: [qa]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U business_test -d business_management_test']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 160
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+  storage:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    environment:
+      MINIO_ROOT_USER: qa-storage
+      MINIO_ROOT_PASSWORD: ${QA_STORAGE_PASSWORD:?Create isolated test credentials first}
+    command: server /data --address :9000 --console-address :9001
+    volumes:
+      - qa-minio:/data
+    networks: [qa]
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    mem_limit: 1280m
+    cpus: 0.5
+    pids_limit: 150
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+
+networks:
+  entry:
+    driver: bridge
+  qa:
+    internal: true
+volumes:
+  qa-postgres:
+  qa-minio:

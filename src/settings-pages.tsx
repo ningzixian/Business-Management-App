@@ -1,3 +1,5 @@
+import { DialogLayer } from './dialog-layer'
+import { NetworkCheck } from './network-check'
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import {
   CheckCircle2,
@@ -134,10 +136,11 @@ function AccountSettings({ user, demoMode, onLogout, onNotify, mobile }: Setting
         <section className="mobile-settings-group">
           <h2>应用信息</h2>
           <div>
-            <button type="button"><span><Server /></span><strong>内网服务</strong><small>独立容器运行</small></button>
-            <button type="button"><span><Smartphone /></span><strong>部门小管家</strong><small>v0.2.0</small></button>
+            <button type="button" onClick={() => onNotify('下方可检查当前配置的业务服务。换址需重新构建手机资源，API 与原生更新共用同一来源。')}><span><Server /></span><strong>内网服务</strong><small>查看连接说明</small></button>
+            <button type="button" onClick={() => onNotify('部门小管家 · v0.2.0 功能修复版。安装包版本以系统应用信息为准；新功能需安装新版 APP。')}><span><Smartphone /></span><strong>部门小管家</strong><small>查看应用说明</small></button>
           </div>
         </section>
+        <NetworkCheck />
         <p className="mobile-version">部门小管家 · v0.2.0</p>
         {dialogs}
       </div>
@@ -147,6 +150,7 @@ function AccountSettings({ user, demoMode, onLogout, onNotify, mobile }: Setting
   return (
     <div className="page-stack account-settings-page">
       <PageHeader title="设置" description="管理个人登录安全、部门账号和系统运行信息。" />
+      <NetworkCheck />
       <section className="settings-layout">
         <Card className="profile-card">
           <div className="profile-hero">
@@ -313,7 +317,7 @@ function ResetPasswordDialog({ user, onClose, onSaved, onNotify }: { user: Manag
 }
 
 function AccountDialog({ title, eyebrow, onClose, children }: { title: string; eyebrow: string; onClose: () => void; children: ReactNode }) {
-  return <div className="modal-backdrop account-modal-backdrop" role="presentation" onMouseDown={onClose}><section className="record-modal account-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><header className="modal-header"><div><span>{eyebrow}</span><h2>{title}</h2></div><button className="icon-button" type="button" onClick={onClose} aria-label="关闭"><X size={19} /></button></header>{children}</section></div>
+  return <DialogLayer className="modal-backdrop account-modal-backdrop" onClose={onClose}><section className="record-modal account-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><header className="modal-header"><div><span>{eyebrow}</span><h2>{title}</h2></div><button className="icon-button" type="button" onClick={onClose} aria-label="关闭"><X size={19} /></button></header>{children}</section></DialogLayer>
 }
 
 function TextField({ label, value, onChange, placeholder = '' }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string }) {
@@ -321,7 +325,7 @@ function TextField({ label, value, onChange, placeholder = '' }: { label: string
 }
 
 function PasswordField({ label, value, onChange, autoComplete = 'new-password' }: { label: string; value: string; onChange: (value: string) => void; autoComplete?: string }) {
-  return <label className="account-field"><span>{label}</span><input type="password" value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} required /></label>
+  return <label className="account-field"><span>{label}</span><input type="password" value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} minLength={8} maxLength={128} required /></label>
 }
 
 function RoleField({ value, onChange, disabled = false }: { value: UserRole; onChange: (value: UserRole) => void; disabled?: boolean }) {
@@ -329,7 +333,7 @@ function RoleField({ value, onChange, disabled = false }: { value: UserRole; onC
 }
 
 function PasswordRule() {
-  return <p className="account-form-note">密码至少 12 位，并同时包含大小写字母、数字和特殊字符。</p>
+  return <p className="account-form-note">密码至少 8 位，并同时包含大小写字母、数字和特殊字符。</p>
 }
 
 function DialogActions({ onClose, submitting, submitLabel }: { onClose: () => void; submitting: boolean; submitLabel: string }) {

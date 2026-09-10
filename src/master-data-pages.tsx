@@ -1,3 +1,4 @@
+import { RecordAction } from './record-maintenance'
 import { WriteButton } from './write-access'
 import { useMemo, useState } from 'react'
 import { Building2, ChevronRight, MapPin, Phone, Plus, Search, ShieldCheck, UserRound, UsersRound } from 'lucide-react'
@@ -42,7 +43,7 @@ export function ContactsPage({ contacts, onCreate }: { contacts: Contact[]; onCr
         </div>
         {filtered.length === 0 ? <div className="master-empty"><Search /><strong>没有找到联系人</strong><span>请更换关键词，或新增一条人脉档案。</span></div> : null}
       </Card>
-      {selectedContact ? <PreviewDialog title={selectedContact.fullName} eyebrow="人脉档案详情" onClose={() => setSelectedContact(null)}><div className="preview-detail-grid"><div><small>手机号码</small><strong>{selectedContact.mobile}</strong></div><div><small>主要组织</small><strong>{selectedContact.primaryOrganizationName || '尚未关联'}</strong></div><div><small>主要职务</small><strong>{selectedContact.primaryTitle || '待补充'}</strong></div><div><small>任职关系</small><strong>{selectedContact.affiliationCount} 项</strong></div><div><small>关系等级</small><strong>{levelLabels[selectedContact.relationshipLevel]}</strong></div><div><small>档案状态</small><strong>{statusLabels[selectedContact.status]}</strong></div><div><small>负责人</small><strong>{selectedContact.ownerName}</strong></div><div><small>关联事项</small><strong>{selectedContact.itemCount} 项</strong></div></div></PreviewDialog> : null}
+      {selectedContact ? <PreviewDialog title={selectedContact.fullName} eyebrow="人脉档案详情" onClose={() => setSelectedContact(null)}><RecordAction kind="contacts" id={selectedContact.id} onDone={() => setSelectedContact(null)} /><div className="preview-detail-grid"><div><small>手机号码</small><strong>{selectedContact.mobile}</strong></div><div><small>主要组织</small><strong>{selectedContact.primaryOrganizationName || '尚未关联'}</strong></div><div><small>主要职务</small><strong>{selectedContact.primaryTitle || '待补充'}</strong></div><div><small>任职关系</small><strong>{selectedContact.affiliationCount} 项</strong></div><div><small>关系等级</small><strong>{levelLabels[selectedContact.relationshipLevel]}</strong></div><div><small>档案状态</small><strong>{statusLabels[selectedContact.status]}</strong></div><div><small>负责人</small><strong>{selectedContact.ownerName}</strong></div><div><small>关联事项</small><strong>{selectedContact.itemCount} 项</strong></div></div></PreviewDialog> : null}
     </div>
   )
 }
@@ -66,7 +67,7 @@ export function MobileContactsPage({ contacts, onCreate, onCreateVisit }: { cont
             <header><InitialAvatar text={contact.fullName} color="#2f6fbe" /><span><strong>{contact.fullName}</strong><small>{contact.primaryTitle || '职务待补充'}</small></span><b className={`relation-level level-${contact.relationshipLevel}`}>{levelLabels[contact.relationshipLevel]}</b></header>
             <div className="mobile-person-affiliation"><Building2 size={16} /><span><strong>{contact.primaryOrganizationName || '尚未关联组织'}</strong><small>{contact.affiliationCount ? `${contact.affiliationCount} 项任职关系` : '独立人脉档案'}</small></span><ChevronRight size={17} /></div>
             <div className="mobile-person-meta"><span><Phone size={14} />{contact.mobile}</span>{contact.city ? <span><MapPin size={14} />{contact.city}</span> : null}</div>
-            <footer><PhoneAction phone={contact.mobile} /><WriteButton type="button" onClick={onCreateVisit}><UserRound size={16} />发起事项</WriteButton></footer>
+            <footer><RecordAction kind="contacts" id={contact.id} label="详情与编辑" /><PhoneAction phone={contact.mobile} /><WriteButton type="button" onClick={onCreateVisit}><UserRound size={16} />发起事项</WriteButton></footer>
           </article>
         ))}
       </section>

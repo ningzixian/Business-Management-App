@@ -3,7 +3,6 @@ import { ArrowRight, Building2, CheckCircle2, ClipboardList, Eye, EyeOff, LockKe
 import { Capacitor } from '@capacitor/core'
 import { useMobileLayout } from './use-mobile-layout'
 import { apiBaseUrl } from './api'
-import { NetworkCheck } from './network-check'
 
 export function LoginPage({
   onLogin,
@@ -60,7 +59,6 @@ export function LoginPage({
       </section>
       <section className="login-form-panel">
         <form className="login-card" onSubmit={submit}>
-          {!mobile ? <NetworkCheck /> : null}
           <header><span className="mobile-login-logo"><ClipboardList size={23} /></span><p><small>部门小管家</small><strong>欢迎回来</strong></p></header>
           <div className="auth-mode-tabs" aria-label="账号入口">
             <button className={mode === 'login' ? 'is-active' : ''} aria-pressed={mode === 'login'} disabled={submitting} type="button" onClick={() => { setMode('login'); setPassword(''); setPasswordConfirmation(''); setShowPassword(false); setError('') }}>登录</button>

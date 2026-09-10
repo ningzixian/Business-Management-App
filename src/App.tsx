@@ -1,3 +1,4 @@
+import { RecordMaintenanceProvider } from './record-maintenance'
 import { BusinessClock, BusinessSession, OpenSourceVisit, useLiveClock } from './business-clock'
 import { useNotifications } from './notifications'
 import { MobileMenuLayer } from './mobile-menu-layer'
@@ -223,6 +224,7 @@ export default function App() {
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : '数据加载失败'
       if (loadGeneration.current === generation) setDataError(message)
+      return false
     } finally {
       if (loadGeneration.current === generation) setDataLoading(false)
     }
@@ -478,7 +480,7 @@ export default function App() {
       setTasks((current) => current.map((item) => item.id === taskId ? { ...item, status: nextStatus, completedAt: nextStatus === '已完成' ? now.toISOString() : undefined } : item))
     } else {
       const apiStatus = nextStatus === '已完成' ? 'completed' : nextStatus === '已逾期' ? 'overdue' : 'pending'
-      const updated = await apiRequest<ApiBusinessItem>(`/business-items/${taskId}`, { method: 'PATCH', body: JSON.stringify({ status: apiStatus }) })
+      const updated = await apiRequest<ApiBusinessItem>(`/business-items/${taskId}`, { method: 'PATCH', body: JSON.stringify({ status: apiStatus, expectedRevision: task.revision }) })
       assertCanWrite()
       setTasks((current) => current.map((item) => item.id === taskId ? toTask(updated) : item))
     }
@@ -570,7 +572,7 @@ export default function App() {
       const source = visits.find(visit => String(visit.id) === id)
       if (source) setSelectedVisit(source)
       else setToast('来源拜访已删除或当前账号不可访问')
-    }}><WriteAccess.Provider value={{ canWrite, busy: writeBusy }}><div className="app-shell">
+    }}><WriteAccess.Provider value={{ canWrite, busy: writeBusy }}><RecordMaintenanceProvider key={sessionUser.userId} enabled={!demoMode} refresh={() => loadRemoteData(false)}><div className="app-shell">
       <aside className="sidebar" aria-label="主导航">
         <div className="brand-block"><span className="brand-mark"><ClipboardList size={22} /></span><span className="brand-copy"><strong>商务活动管理</strong><small>部门业务协作平台 · v0.2.0</small></span></div>
         <nav className="sidebar-nav">
@@ -654,7 +656,7 @@ export default function App() {
         setEditingVisit(selectedVisit); setSourceVisit(null); setCreateKind('visit'); setCreateOpen(true); setSelectedVisit(null)
       }} onCreateTask={() => { openCreate('task'); setSourceVisit(selectedVisit); setSelectedVisit(null) }} onNotify={setToast} />
       {toast ? <div className="toast" role="status">{toast.startsWith('操作失败') ? <X size={18} /> : <CheckCircle2 size={18} />}{toast}</div> : null}
-    </div></WriteAccess.Provider></OpenSourceVisit.Provider></BusinessSession.Provider></BusinessClock.Provider>
+    </div></RecordMaintenanceProvider></WriteAccess.Provider></OpenSourceVisit.Provider></BusinessSession.Provider></BusinessClock.Provider>
   )
 }
 

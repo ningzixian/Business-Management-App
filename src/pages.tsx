@@ -1,3 +1,4 @@
+import { RecordAction } from './record-maintenance'
 import { WriteButton } from './write-access'
 import {
   AlertTriangle,
@@ -421,7 +422,7 @@ export function CustomersPage({
         </div>
         {!filteredCustomers.length ? <div className="table-empty">没有找到符合条件的组织</div> : null}
       </Card>
-      {selectedCustomer ? <PreviewDialog title={selectedCustomer.name} eyebrow="甲方组织详情" onClose={() => setSelectedCustomer(null)}><div className="preview-detail-grid"><DetailValue label="行业" value={selectedCustomer.industry} /><DetailValue label="地区" value={selectedCustomer.region} /><DetailValue label="主要联系人" value={`${selectedCustomer.contact} · ${selectedCustomer.phone}`} /><DetailValue label="负责人" value={selectedCustomer.owner} /><DetailValue label="最近拜访" value={selectedCustomer.lastVisit} /><DetailValue label="下一步行动" value={selectedCustomer.nextAction} /><DetailValue label="待办事项" value={`${selectedCustomer.openTasks} 项`} /><DetailValue label="组织状态" value={selectedCustomer.status} /></div></PreviewDialog> : null}
+      {selectedCustomer ? <PreviewDialog title={selectedCustomer.name} eyebrow="甲方组织详情" onClose={() => setSelectedCustomer(null)}><RecordAction kind="organizations" id={selectedCustomer.id} onDone={() => setSelectedCustomer(null)} /><div className="preview-detail-grid"><DetailValue label="行业" value={selectedCustomer.industry} /><DetailValue label="地区" value={selectedCustomer.region} /><DetailValue label="主要联系人" value={`${selectedCustomer.contact} · ${selectedCustomer.phone}`} /><DetailValue label="负责人" value={selectedCustomer.owner} /><DetailValue label="最近拜访" value={selectedCustomer.lastVisit} /><DetailValue label="下一步行动" value={selectedCustomer.nextAction} /><DetailValue label="待办事项" value={`${selectedCustomer.openTasks} 项`} /><DetailValue label="组织状态" value={selectedCustomer.status} /></div></PreviewDialog> : null}
     </div>
   )
 }
@@ -581,7 +582,7 @@ export function TasksPage({
         </div>
         {!filteredTasks.length ? <div className="table-empty">没有找到符合条件的待办</div> : null}
       </Card>
-      {selectedTask ? <PreviewDialog title={selectedTask.title} eyebrow="待办详情" onClose={() => setSelectedTask(null)}><div className="preview-detail-grid"><DetailValue label="关联组织" value={selectedTask.customer} /><DetailValue label="负责人" value={selectedTask.assignee} /><DetailValue label="截止时间" value={selectedTask.dueLabel} /><DetailValue label="优先级" value={`${selectedTask.priority}优先级`} /><DetailValue label="当前状态" value={selectedTask.status} /><DetailValue label="来源" value={selectedTask.source} /></div><section className="task-description"><h3>补充说明</h3><p>{selectedTask.content || '未填写'}</p></section><AttachmentPanel key={selectedTask.id} itemId={selectedTask.id} /><footer className="preview-dialog-actions"><WriteButton className="button button-primary" type="button" onClick={() => { onToggleTask(selectedTask.id); setSelectedTask(null) }}>{selectedTask.status === '已完成' ? '恢复待办' : '标记完成'}</WriteButton></footer></PreviewDialog> : null}
+      {selectedTask ? <PreviewDialog title={selectedTask.title} eyebrow="待办详情" onClose={() => setSelectedTask(null)}><RecordAction kind="business-items" id={selectedTask.id} onDone={() => setSelectedTask(null)} /><div className="preview-detail-grid"><DetailValue label="关联组织" value={selectedTask.customer} /><DetailValue label="负责人" value={selectedTask.assignee} /><DetailValue label="截止时间" value={selectedTask.dueLabel} /><DetailValue label="优先级" value={`${selectedTask.priority}优先级`} /><DetailValue label="当前状态" value={selectedTask.status} /><DetailValue label="来源" value={selectedTask.source} /></div><section className="task-description"><h3>补充说明</h3><p>{selectedTask.content || '未填写'}</p></section><AttachmentPanel key={selectedTask.id} itemId={selectedTask.id} /><footer className="preview-dialog-actions"><WriteButton className="button button-primary" type="button" onClick={() => { onToggleTask(selectedTask.id); setSelectedTask(null) }}>{selectedTask.status === '已完成' ? '恢复待办' : '标记完成'}</WriteButton></footer></PreviewDialog> : null}
     </div>
   )
 }

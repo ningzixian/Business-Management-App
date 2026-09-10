@@ -4,12 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '../dist');
 const bootstrap = String.raw`<script>
-const role=new URLSearchParams(location.search).get('role')==='readonly'?'readonly':'member';
+const role=['readonly','manager'].includes(new URLSearchParams(location.search).get('role'))?new URLSearchParams(location.search).get('role'):'member';
 const user={userId:new URLSearchParams(location.search).get('user')||'qa-local',departmentId:'qa-local',username:'qa-local',displayName:'隔离测试',role};
 localStorage.setItem('bam-auth-session-v0.2',JSON.stringify({accessToken:'synthetic-only',refreshToken:'synthetic-only',expiresIn:3600,user}));
 let mode='success',writes=0;
 let tasks=JSON.parse(sessionStorage.getItem('qa-tasks')||'null')||[{id:'qa-task',itemType:'task',title:'测试待办',content:'原有说明\n第二行',status:'pending',isInternal:true,dueAt:new Date(Date.now()+86400000).toISOString(),ownerUserId:user.userId,ownerName:'隔离测试',organizations:[],contacts:[],participantNames:[]}];
 let organizations=[],contacts=[];
+const maintenance=new URLSearchParams(location.search).has('maintenance');
+if(maintenance){
+ organizations=[{id:'qa-org',revision:'1',name:'修补测试组织',shortName:'测试',organizationType:'company',status:'normal',industry:'服务',region:'测试区',contactCount:1,itemCount:1,parentOrganizationId:null}];
+ contacts=[{id:'qa-contact',revision:'1',fullName:'合成人脉',mobile:'13800000000',status:'active',relationshipLevel:'normal',visibility:'department',tags:[],affiliations:[],affiliationCount:0,itemCount:0}];
+ tasks=[{id:'qa-task',revision:'1',itemType:'task',title:'测试待办',content:'原说明',status:'pending',priority:'medium',isInternal:true,ownerUserId:user.userId,ownerName:user.displayName,dueAt:new Date(Date.now()+86400000).toISOString(),organizations:[],contacts:[],participantNames:[]}];
+}
 let attachments=JSON.parse(sessionStorage.getItem('qa-attachments')||'[]');
 if(new URLSearchParams(location.search).has('phase2')) {
  organizations=[{id:'north',name:'北方组织',shortName:'北',region:'北区',industry:'制造',status:'normal',contactCount:0,itemCount:0},{id:'south',name:'南方组织',region:'南区',industry:'服务',status:'normal',contactCount:0,itemCount:0}];
@@ -40,6 +46,25 @@ window.fetch=async(url,init={})=>{
  const reply=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json'}});
  if(p.endsWith('/auth/me'))return reply({user});
  if(p.endsWith('/auth/logout'))return reply({success:true},201);
+ if(maintenance&&/^\/api\/v1\/(organizations|contacts|business-items)\//.test(p)){
+  if(p.endsWith('/attachments'))return reply({items:[],enabled:false,maxUploadBytes:0});
+  const parts=p.split('/'),collection=parts[3],id=parts[4];
+  const rows=collection==='organizations'?organizations:collection==='contacts'?contacts:tasks;
+  const row=rows.find(r=>r.id===id);if(!row)return reply({message:'记录已删除'},404);
+  if(method==='GET')return reply(row);
+  writes++;count();if(role==='readonly'||(method==='DELETE'&&role!=='manager'))return reply({message:'无权限'},403);
+  if(mode==='offline')throw Error('offline');if(mode!=='success')return reply({message:'注入测试错误 '+mode},Number(mode)||500);
+  const body=JSON.parse(init.body||'{}'),expected=new Headers(init.headers).get('If-Match')||body.expectedRevision;
+  if(expected&&expected!==row.revision)return reply({message:'版本冲突'},409);
+  if(parts[5]==='affiliations'){
+   if(method==='POST')row.affiliations.push({...body,organizationName:organizations.find(o=>o.id===body.organizationId)?.name,id:'aff-'+Date.now()});
+   else if(method==='DELETE')row.affiliations=row.affiliations.filter(a=>a.id!==parts[6]);
+   else Object.assign(row.affiliations.find(a=>a.id===parts[6]),body);
+   row.affiliationCount=row.affiliations.length;
+  }else if(method==='DELETE'){rows.splice(rows.indexOf(row),1);return reply({success:true});}
+  else Object.assign(row,body);
+  row.revision=String(Number(row.revision)+1);return reply(row);
+ }
  if(p.includes('/notifications')) {
   const key='qa-notice-reads:'+user.userId;
   const reads=JSON.parse(localStorage.getItem(key)||'{}');

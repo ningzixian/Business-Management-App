@@ -1,3 +1,4 @@
+import { RecordAction } from './record-maintenance'
 import { DialogLayer } from './dialog-layer'
 import { WriteButton } from './write-access'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
@@ -627,7 +628,7 @@ export function VisitDetailDrawer({
             </div>
           </section>
         </div>
-        <footer className="drawer-footer"><WriteButton className="button button-secondary" type="button" onClick={onEdit}>编辑记录</WriteButton><WriteButton className="button button-primary" type="button" onClick={onCreateTask}>生成待办</WriteButton></footer>
+        <footer className="drawer-footer"><RecordAction kind="business-items" id={visit.id} onDone={onClose} label="删除与管理" /><WriteButton className="button button-secondary" type="button" onClick={onEdit}>编辑记录</WriteButton><WriteButton className="button button-primary" type="button" onClick={onCreateTask}>生成待办</WriteButton></footer>
       </aside>
       <TaskPreview task={selectedTask} onClose={() => setSelectedTask(null)} />
     </DialogLayer>

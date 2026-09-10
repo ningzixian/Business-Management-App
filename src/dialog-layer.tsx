@@ -22,11 +22,12 @@ window.addEventListener('bam-native-back', event => {
 
 export function hasOpenDialogs() { return layers.length > 0 }
 
-export function DialogLayer({ children, className, onClose, protect = true }: {
-  children: ReactNode; className: string; onClose: () => void; protect?: boolean
+export function DialogLayer({ children, className, onClose, protect = true, savedVersion }: {
+  children: ReactNode; className: string; onClose: () => void; protect?: boolean; savedVersion?: string
 }) {
   const root = useRef<HTMLDivElement>(null)
   const dirty = useRef(false)
+  useEffect(() => { dirty.current = false }, [savedVersion])
   const [dismissMessage, setDismissMessage] = useState('')
   const close = useRef(onClose)
   close.current = onClose
@@ -45,13 +46,23 @@ export function DialogLayer({ children, className, onClose, protect = true }: {
     const dialog = node.querySelector<HTMLElement>('[role="dialog"]') || node
     dialog.tabIndex = -1
     const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]')).filter(el => el.getClientRects().length && !el.closest('[inert]'))
-    const entry: Layer = { root: node, dismiss: () => { if (allow()) close.current() }, focus: () => (focusable()[0] || dialog).focus() }
+    // Focusing a form control while a full-screen dialog is mounting makes some
+    // Android WebViews scroll that control into view. Focus the dialog container
+    // instead and explicitly preserve the current scroll position.
+    const focusDialog = () => dialog.focus({ preventScroll: true })
+    const entry: Layer = { root: node, dismiss: () => { if (allow()) close.current() }, focus: focusDialog }
     layer.current = entry
     layers.push(entry)
     const overflow = document.body.style.overflow
     if (layers.length === 1) document.body.dataset.dialogOverflow = overflow
     document.body.style.overflow = 'hidden'
     entry.focus()
+    const resetScroll = () => {
+      dialog.scrollTop = 0
+      dialog.querySelectorAll<HTMLElement>('.record-form, .preview-dialog-body, .account-form').forEach(element => { element.scrollTop = 0 })
+    }
+    resetScroll()
+    const resetFrame = requestAnimationFrame(resetScroll)
     queueMicrotask(syncHistory)
     const key = (event: KeyboardEvent) => {
       if (layers.at(-1) !== entry) return
@@ -68,6 +79,7 @@ export function DialogLayer({ children, className, onClose, protect = true }: {
     document.addEventListener('focusin', focus)
     window.addEventListener('beforeunload', unload)
     return () => {
+      cancelAnimationFrame(resetFrame)
       layers.splice(layers.indexOf(entry), 1)
       document.removeEventListener('keydown', key, true)
       document.removeEventListener('focusin', focus)

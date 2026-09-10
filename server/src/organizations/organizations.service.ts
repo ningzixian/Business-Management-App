@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service'
 import type { AuthenticatedUser } from '../common/authenticated-user'
 import { contactVisibilitySql } from '../common/contact-visibility'
 import { paginationMeta } from '../common/pagination.dto'
+import { lockRecord } from '../common/record-lock'
 import { DatabaseService, type DatabaseClient } from '../database/database.service'
 import type {
   CreateOrganizationDto,
@@ -76,7 +77,7 @@ export class OrganizationsService {
 
   async get(user: AuthenticatedUser, id: string) {
     const organization = await this.database.query(
-      `SELECT o.id, o.name, o.short_name AS "shortName", o.unified_social_credit_code AS "unifiedSocialCreditCode",
+      `SELECT o.id, o.xmin::text AS revision, o.name, o.short_name AS "shortName", o.unified_social_credit_code AS "unifiedSocialCreditCode",
               o.organization_type AS "organizationType", o.industry, o.region, o.address, o.website, o.status,
               o.source, o.notes, o.parent_organization_id AS "parentOrganizationId", parent.name AS "parentOrganizationName",
               o.owner_user_id AS "ownerUserId", owner.display_name AS "ownerName",
@@ -147,10 +148,12 @@ export class OrganizationsService {
   }
 
   async update(user: AuthenticatedUser, id: string, dto: UpdateOrganizationDto, request?: Request) {
+    if (dto.name !== undefined && (typeof dto.name !== 'string' || dto.name.trim().length < 2)) throw new BadRequestException('组织名称至少需要两个有效字符')
     await this.get(user, id)
     await this.database.transaction(async (client) => {
       await this.lockHierarchy(client, user.departmentId)
       await this.assertOrganization(client, user.departmentId, id)
+      await lockRecord(client, 'organizations', user, id, request)
       if (dto.parentOrganizationId) {
         if (dto.parentOrganizationId === id) throw new BadRequestException('组织不能将自己设为上级')
         await this.assertOrganization(client, user.departmentId, dto.parentOrganizationId)
@@ -193,6 +196,7 @@ export class OrganizationsService {
     await this.database.transaction(async (client) => {
       await this.lockHierarchy(client, user.departmentId)
       const children = await client.query('SELECT id FROM organizations WHERE parent_organization_id = $1 AND deleted_at IS NULL LIMIT 1', [id])
+      await lockRecord(client, 'organizations', user, id, request)
       if (children.rowCount) throw new BadRequestException('请先调整或删除下级组织，再删除当前组织')
       await client.query(
         `UPDATE organizations SET deleted_at = NOW(), status = 'inactive', updated_by = $1

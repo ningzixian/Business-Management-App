@@ -194,6 +194,7 @@ export function toVisit(item: ApiBusinessItem): Visit {
 export function toTask(item: ApiBusinessItem): Task {
   const due = item.dueAt ? new Date(item.dueAt) : null
   return {
+    revision: item.revision,
     sourceItemId: item.sourceItemId,
     ownerUserId: item.ownerUserId,
     completedAt: item.completedAt,

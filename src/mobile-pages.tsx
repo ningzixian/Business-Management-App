@@ -1,3 +1,4 @@
+import { RecordAction } from './record-maintenance'
 import { WriteButton } from './write-access'
 import { useState, type ReactNode } from 'react'
 import {
@@ -291,7 +292,7 @@ export function MobileCustomersPage({
             </div>
             <div className="mobile-next-action"><span>下一步</span><strong>{customer.nextAction}</strong>{customer.openTasks ? <b>{customer.openTasks} 项待办</b> : <b className="is-clear">暂无待办</b>}</div>
             <footer>
-              <PhoneAction phone={customer.phone} label="打电话" />
+              <RecordAction kind="organizations" id={customer.id} label="详情与编辑" /><PhoneAction phone={customer.phone} label="打电话" />
               <MapAction address={customer.address} />
               <WriteButton className="is-primary" type="button" onClick={onCreateVisit}><CalendarCheck2 size={16} />约拜访</WriteButton>
             </footer>

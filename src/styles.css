@@ -148,7 +148,7 @@
   position: relative;
   z-index: 1;
   max-width: 650px;
-  margin: auto 0 58px;
+  margin: clamp(64px, 12vh, 120px) 0 58px;
 }
 
 .login-promise > span {
@@ -181,6 +181,7 @@
 }
 
 .login-feature-grid {
+  margin-top: 0;
   position: relative;
   z-index: 1;
   display: grid;
@@ -6171,6 +6172,7 @@ button.stat-card:hover {
     max-height: none;
     flex-direction: column;
     overflow: hidden;
+    overscroll-behavior: contain;
     border: 0;
     border-radius: 0;
     animation-name: mobile-fullscreen-in;
@@ -6207,6 +6209,9 @@ button.stat-card:hover {
     min-height: 0;
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
     padding: 16px 16px 18px;
     flex-direction: column;
   }
@@ -6311,6 +6316,16 @@ button.stat-card:hover {
     flex: 0 0 auto;
     margin: auto -16px -18px;
     padding: 0 16px env(safe-area-inset-bottom);
+    touch-action: pan-y;
+  }
+
+  .record-modal.preview-dialog .preview-dialog-body {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
   }
 
   .modal-footer .button {

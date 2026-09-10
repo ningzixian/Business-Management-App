@@ -207,6 +207,7 @@ export class BusinessItemsService {
   }
 
   async update(user: AuthenticatedUser, id: string, dto: UpdateBusinessItemDto, request?: Request) {
+    if (dto.title !== undefined && (typeof dto.title !== 'string' || !dto.title.trim())) throw new BadRequestException('事项标题不能为空')
     const current = await this.itemRow(user, id)
     await this.database.transaction(async (client) => {
       const locked = await client.query<ItemRow>(
@@ -264,7 +265,10 @@ export class BusinessItemsService {
   async remove(user: AuthenticatedUser, id: string, request?: Request) {
     const current = await this.itemRow(user, id)
     await this.database.transaction(async (client) => {
-      await client.query('UPDATE business_items SET deleted_at = NOW(), updated_by = $1 WHERE id = $2 AND department_id = $3', [user.userId, id, user.departmentId])
+      const locked = await client.query<{ revision: string }>('SELECT xmin::text AS revision FROM business_items WHERE id = $1 AND department_id = $2 AND deleted_at IS NULL FOR UPDATE', [id, user.departmentId])
+      if (!locked.rowCount) throw new NotFoundException('事项已删除，请刷新列表')
+      if (request?.headers['if-match'] && request.headers['if-match'] !== locked.rows[0].revision) throw new ConflictException('事项已被修改，请重新打开后再删除')
+      await client.query('UPDATE business_items SET deleted_at = NOW(), updated_by = $1 WHERE id = $2 AND department_id = $3 AND deleted_at IS NULL', [user.userId, id, user.departmentId])
       await this.audit.log({ actor: user, action: `${current.itemType}.delete`, entityType: 'business_item', entityId: id, request }, client)
     })
     return { success: true }

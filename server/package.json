@@ -10,7 +10,7 @@
     "start": "node dist/main.js",
     "start:prod": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/relation-policy.test.js .test-dist/test/environment.test.js .test-dist/test/migration-contract.test.js .test-dist/test/password-policy.test.js .test-dist/test/organization-hierarchy.test.js .test-dist/test/contact-visibility.test.js .test-dist/test/attachments.test.js .test-dist/test/notifications.test.js"
+    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/relation-policy.test.js .test-dist/test/environment.test.js .test-dist/test/migration-contract.test.js .test-dist/test/password-policy.test.js .test-dist/test/organization-hierarchy.test.js .test-dist/test/contact-visibility.test.js .test-dist/test/attachments.test.js .test-dist/test/notifications.test.js .test-dist/test/record-maintenance.test.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1126.0",

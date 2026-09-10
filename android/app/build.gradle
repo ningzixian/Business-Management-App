@@ -7,8 +7,8 @@ android {
         applicationId "com.company.departmentsteward"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode = (project.findProperty('qaVersionCode') ?: '7').toInteger()
-        versionName = project.hasProperty('qaVersionCode') ? '0.2.5-QA' : '0.2.5'
+        versionCode = (project.findProperty('qaVersionCode') ?: '9').toInteger()
+        versionName = project.hasProperty('qaVersionCode') ? '0.2.7-QA' : '0.2.7'
         def serviceFile = file('src/main/assets/public/service-config.json')
         def service = serviceFile.exists() ? new groovy.json.JsonSlurper().parse(serviceFile) : [:]
         manifestPlaceholders = [businessCleartext: service.origin?.startsWith('http://') ? 'true' : 'false']

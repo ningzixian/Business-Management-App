@@ -40,6 +40,7 @@ export interface Visit {
 }
 
 export interface Task {
+  revision?: string
   sourceItemId?: string
   ownerUserId?: string
   completedAt?: string

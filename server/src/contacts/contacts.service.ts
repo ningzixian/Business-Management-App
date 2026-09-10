@@ -3,6 +3,7 @@ import type { Request } from 'express'
 import { AuditService } from '../audit/audit.service'
 import type { AuthenticatedUser } from '../common/authenticated-user'
 import { paginationMeta } from '../common/pagination.dto'
+import { lockRecord } from '../common/record-lock'
 import { DatabaseService, type DatabaseClient } from '../database/database.service'
 import type {
   ContactListQueryDto,
@@ -80,7 +81,7 @@ export class ContactsService {
   async get(user: AuthenticatedUser, id: string) {
     const elevated = ['admin', 'manager'].includes(user.role)
     const contact = await this.database.query(
-      `SELECT c.id, c.full_name AS "fullName", c.gender, c.mobile, c.phone, c.email, c.wechat, c.city,
+      `SELECT c.id, c.xmin::text AS revision, c.full_name AS "fullName", c.gender, c.mobile, c.phone, c.email, c.wechat, c.city,
               c.tags, c.source, c.relationship_level AS "relationshipLevel", c.status, c.visibility,
               c.owner_user_id AS "ownerUserId", owner.display_name AS "ownerName", c.notes,
               c.created_at AS "createdAt", c.updated_at AS "updatedAt"
@@ -149,8 +150,10 @@ export class ContactsService {
   }
 
   async update(user: AuthenticatedUser, id: string, dto: UpdateContactDto, request?: Request) {
+    if (dto.fullName !== undefined && (typeof dto.fullName !== 'string' || !dto.fullName.trim())) throw new BadRequestException('联系人姓名不能为空')
     await this.get(user, id)
     await this.database.transaction(async (client) => {
+      await lockRecord(client, 'contacts', user, id, request)
       if (dto.ownerUserId) await this.assertUser(client, user.departmentId, dto.ownerUserId)
       const columns: Record<string, unknown> = {
         full_name: dto.fullName?.trim(), gender: dto.gender, mobile: dto.mobile?.trim(), phone: dto.phone?.trim(),
@@ -177,6 +180,8 @@ export class ContactsService {
   async addAffiliation(user: AuthenticatedUser, contactId: string, dto: CreateAffiliationDto, request?: Request) {
     await this.get(user, contactId)
     const affiliationId = await this.database.transaction(async (client) => {
+      await lockRecord(client, 'contacts', user, contactId, request)
+      await client.query('UPDATE contacts SET updated_by = $2 WHERE id = $1', [contactId, user.userId])
       await this.assertAffiliations(client, user.departmentId, [dto])
       const id = await this.insertAffiliation(client, user, contactId, dto)
       await this.audit.log({ actor: user, action: 'contact_affiliation.create', entityType: 'contact_affiliation', entityId: id, changes: { contactId, organizationId: dto.organizationId }, request }, client)
@@ -188,15 +193,20 @@ export class ContactsService {
   async updateAffiliation(user: AuthenticatedUser, contactId: string, affiliationId: string, dto: UpdateAffiliationDto, request?: Request) {
     await this.get(user, contactId)
     await this.database.transaction(async (client) => {
-      const current = await client.query<{ organizationId: string; organizationUnitId?: string }>(
-        `SELECT organization_id AS "organizationId", organization_unit_id AS "organizationUnitId"
+      await lockRecord(client, 'contacts', user, contactId, request)
+      await client.query('UPDATE contacts SET updated_by = $2 WHERE id = $1', [contactId, user.userId])
+      const current = await client.query<CreateAffiliationDto>(
+        `SELECT organization_id AS "organizationId", organization_unit_id AS "organizationUnitId",
+                status, is_primary AS "isPrimary", start_date::text AS "startDate", end_date::text AS "endDate"
          FROM contact_affiliations WHERE id = $1 AND contact_id = $2 AND deleted_at IS NULL`,
         [affiliationId, contactId],
       )
       if (!current.rowCount) throw new NotFoundException('未找到任职关系')
       const organizationId = dto.organizationId || current.rows[0].organizationId
-      await this.assertAffiliations(client, user.departmentId, [{ ...dto, organizationId } as CreateAffiliationDto])
-      if (dto.isPrimary) {
+      const merged = { ...current.rows[0], ...dto, organizationId }
+      if (merged.status === 'historical') dto.isPrimary = false
+      await this.assertAffiliations(client, user.departmentId, [{ ...merged, isPrimary: dto.isPrimary ?? merged.isPrimary }])
+      if (dto.isPrimary && merged.status === 'current') {
         await client.query('UPDATE contact_affiliations SET is_primary = FALSE, updated_by = $2 WHERE contact_id = $1 AND deleted_at IS NULL', [contactId, user.userId])
       }
       const columns: Record<string, unknown> = {
@@ -223,6 +233,8 @@ export class ContactsService {
   async removeAffiliation(user: AuthenticatedUser, contactId: string, affiliationId: string, request?: Request) {
     await this.get(user, contactId)
     await this.database.transaction(async (client) => {
+      await lockRecord(client, 'contacts', user, contactId, request)
+      await client.query('UPDATE contacts SET updated_by = $2 WHERE id = $1', [contactId, user.userId])
       const result = await client.query(
         `UPDATE contact_affiliations SET deleted_at = NOW(), is_primary = FALSE, updated_by = $1
          WHERE id = $2 AND contact_id = $3 AND deleted_at IS NULL RETURNING id`,
@@ -237,6 +249,7 @@ export class ContactsService {
   async remove(user: AuthenticatedUser, id: string, request?: Request) {
     await this.get(user, id)
     await this.database.transaction(async (client) => {
+      await lockRecord(client, 'contacts', user, id, request)
       await client.query(
         `UPDATE contacts SET deleted_at = NOW(), status = 'inactive', updated_by = $1
          WHERE id = $2 AND department_id = $3 AND deleted_at IS NULL`,
@@ -259,7 +272,7 @@ export class ContactsService {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13) RETURNING id`,
       [
         contactId, dto.organizationId, dto.organizationUnitId || null, dto.title?.trim() || null,
-        dto.relationshipRole?.trim() || null, dto.isPrimary, dto.status, dto.startDate || null, dto.endDate || null,
+        dto.relationshipRole?.trim() || null, dto.status === 'current' && dto.isPrimary, dto.status, dto.startDate || null, dto.endDate || null,
         dto.source?.trim() || null, dto.confidence, dto.notes?.trim() || null, user.userId,
       ],
     )
@@ -268,6 +281,10 @@ export class ContactsService {
 
   private async assertAffiliations(client: DatabaseClient, departmentId: string, affiliations: CreateAffiliationDto[]) {
     for (const affiliation of affiliations) {
+      for (const date of [affiliation.startDate, affiliation.endDate]) {
+        if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date)) throw new BadRequestException('任职日期必须为有效的年月日')
+      }
+      if (affiliation.startDate && affiliation.endDate && affiliation.endDate < affiliation.startDate) throw new BadRequestException('结束日期不能早于开始日期')
       const organization = await client.query('SELECT id FROM organizations WHERE id = $1 AND department_id = $2 AND deleted_at IS NULL', [affiliation.organizationId, departmentId])
       if (!organization.rowCount) throw new BadRequestException('任职关系中的甲方组织不存在或不可用')
       if (affiliation.organizationUnitId) {

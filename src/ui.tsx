@@ -116,9 +116,9 @@ export function TextLink({ children, onClick }: { children: ReactNode; onClick?:
   )
 }
 
-export function PreviewDialog({ title, eyebrow = '详情', children, onClose }: { title: string; eyebrow?: string; children: ReactNode; onClose: () => void }) {
+export function PreviewDialog({ title, eyebrow = '详情', children, onClose, savedVersion }: { title: string; eyebrow?: string; children: ReactNode; onClose: () => void; savedVersion?: string }) {
   return (
-    <DialogLayer className="modal-backdrop" onClose={onClose}>
+    <DialogLayer className="modal-backdrop" onClose={onClose} savedVersion={savedVersion}>
       <section className="record-modal preview-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal-header"><div><span>{eyebrow}</span><h2>{title}</h2></div><button className="icon-button" type="button" onClick={onClose} aria-label="关闭"><X size={20} /></button></header>
         <div className="preview-dialog-body">{children}</div>
